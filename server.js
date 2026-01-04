@@ -200,11 +200,16 @@ async function getMusicBrainzData(artist, album) {
   }
 }
 
-// Add this near the top of your server.js, replacing the existing CORS middleware
+// Serve static files from public directory
+app.use(express.static('public'));
+
+// Root route to serve index.html
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/public/index.html');
+});
 
 // CORS and JSON middleware
 app.use((req, res, next) => {
-  // Allow requests from your WordPress site and anywhere (for development)
   const allowedOrigins = [
     'https://sortedsongs.com',
     'https://www.sortedsongs.com',
