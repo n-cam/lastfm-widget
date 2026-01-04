@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Top Albums by Year (2020–2025)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<!-- Pixel font -->
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/ms-sans-serif@0.2.0/fonts/ms_sans_serif.woff2" as="font" type="font/woff2" crossorigin>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+@font-face {
+  font-family: "Pixelated MS Sans Serif";
+  src: url("https://cdn.jsdelivr.net/npm/ms-sans-serif@0.2.0/fonts/ms_sans_serif.woff2") format("woff2");
+}
+
+body {
+  font-family: "Pixelated MS Sans Serif", monospace;
+  background: linear-gradient(135deg, #94F1E1, #EDD0EE);
+  color: #4932C9;
+  padding: 20px;
+}
+
+.container {
+  max-width: 1100px;
+  margin: auto;
+}
+
+h1 {
+  text-align: center;
+  font-size: 40px;
+  margin-bottom: 10px;
+  text-shadow: 3px 3px #94F1E1;
+}
+
+.subtitle {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.window {
+  border: 2px solid #4932C9;
+  background: #E2E2E2;
+  padding: 4px;
+  margin-bottom: 20px;
+  box-shadow: 4px 4px rgba(73,50,201,.3);
+}
+
+.title {
+  background: #E2E2E2;
+  border: 2px solid #4932C9;
+  padding: 6px 10px;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.content {
+  background: #F9EFF9;
+  border: 2px solid #4932C9;
+  padding: 15px;
+}
+
+input, button {
+  width: 100%;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 16px;
+  border: 2px solid #4932C9;
+}
+
+button {
+  margin-top: 10px;
+  background: #94F1E1;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+button:hover {
+  background: #EDD0EE;
+}
+
+.chart-block {
+  margin-bottom: 40px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+}
+
+.error {
+  background: #ff6b6b;
+  color: white;
+  padding: 15px;
+  border: 2px solid #c92a2a;
+  text-align: center;
+  font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+  <h1>♪ Top Albums by Year ♪</h1>
+  <p class="subtitle">2020–2025 · Powered by Last.fm</p>
+
+  <div class="window">
+    <div class="title">⚙️ Settings</div>
+    <div class="content">
+      <input id="username" placeholder="Last.fm username" />
+      <button id="loadBtn">Load Charts</button>
+    </div>
+  </div>
+
+  <div id="error" class="error" style="display:none;"></div>
+  <div id="loading" class="loading" style="display:none;">Loading yearly charts…</div>
+
+  <div id="charts"></div>
+</div>
+
+<script>
+const API_BASE = "https://YOUR_BACKEND_DOMAIN/api/top-albums";
+const YEARS = [2020, 2021, 2022, 2023, 2024, 2025];
+
+document.getElementById("loadBtn").addEventListener("click", async () => {
+  const user = document.getElementById("username").value.trim();
+  if (!user) return alert("Enter a username");
+
+  document.getElementById("charts").innerHTML = "";
+  document.getElementById("error").style.display = "none";
+  document.getElementById("loading").style.display = "block";
+
+  try {
+    for (const year of YEARS) {
+      const res = await fetch(`${API_BASE}?user=${encodeURIComponent(user)}&year=${year}&limit=10`);
+      if (!res.ok) throw new Error("Failed to fetch data");
+
+      const data = await res.json();
+      if (!data.albums || data.albums.length === 0) continue;
+
+      renderChart(year, data.albums);
+    }
+  } catch (err) {
+    showError("Could not load charts. Update your cache first.");
+  } finally {
+    document.getElementById("loading").style.display = "none";
+  }
+});
+
+function renderChart(year, albums) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "window chart-block";
+
+  wrapper.innerHTML = `
+    <div class="title">📅 ${year}</div>
+    <div class="content">
+      <canvas id="chart-${year}" height="300"></canvas>
+    </div>
+  `;
+
+  document.getElementById("charts").appendChild(wrapper);
+
+  const ctx = document.getElementById(`chart-${year}`).getContext("2d");
+
+  new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: albums.map(a => `${a.name} — ${a.artist}`),
+      datasets: [{
+        data: albums.map(a => a.playcount),
+        backgroundColor: "#94F1E1",
+        borderColor: "#4932C9",
+        borderWidth: 2
+      }]
+    },
+    options: {
+      indexAxis: "y",
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        x: {
+          ticks: { color: "#4932C9" }
+        },
+        y: {
+          ticks: { color: "#4932C9" }
+        }
+      }
+    }
+  });
+}
+
+function showError(msg) {
+  const e = document.getElementById("error");
+  e.textContent = "⚠️ " + msg;
+  e.style.display = "block";
+}
+</script>
+</body>
+</html>
