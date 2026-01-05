@@ -226,8 +226,7 @@
                     document.getElementById('noResults').style.display = 'block';
                     document.getElementById('widgetTitle').textContent = `${year} albums`;
                     document.getElementById('widgetSubtitle').textContent = 'no albums found';
-                
-                    
+                } // <--- THIS WAS MISSING
 
             } catch (err) {
                 console.error('Error loading albums:', err);
