@@ -497,25 +497,7 @@
         }
     </style>
 </head>
-<script>
-function sendHeight() {
-    const height = document.documentElement.scrollHeight;
-    window.parent.postMessage({
-        type: 'resize',
-        height: height
-    }, '*');
-}
 
-// 1. Send height when page finished loading
-window.addEventListener('load', sendHeight);
-
-// 2. Send height when window is resized (for responsive changes)
-window.addEventListener('resize', sendHeight);
-
-// 3. Extra: Send height if the content changes (like when you filter albums)
-const observer = new MutationObserver(sendHeight);
-observer.observe(document.body, { childList: true, subtree: true });
-</script>
 <body>
     <div class="container">
         <div class="section">
@@ -899,6 +881,8 @@ observer.observe(document.body, { childList: true, subtree: true });
 
         // Send height on load and when content changes
         window.addEventListener('load', sendHeight);
+        window.addEventListener('resize', sendHeight); // Added this for mobile 
+
         const observer = new MutationObserver(sendHeight);
         observer.observe(document.body, { childList: true, subtree: true, attributes: true });
     </script>
