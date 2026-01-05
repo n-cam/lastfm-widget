@@ -563,8 +563,8 @@
                     <div class="form-section">
                         <label for="limit">Show:</label>
                         <select id="limit">
-                            <option value="5">top 5</option>
-                            <option value="10" selected>top 10</option>
+                            <option value="5" selected>top 5</option>
+                            <option value="10">top 10</option>
                             <option value="25">top 25</option>
                         </select>
                     </div>
@@ -691,8 +691,8 @@
             
             // Update loading message based on filters
             if (activeFilter !== 'all') {
-                document.getElementById('loadingMessage').textContent = 'scanning your top 1000 albums...';
-                document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~5-10 minutes)';
+                document.getElementById('loadingMessage').textContent = 'scanning your top 500 albums...';
+                document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~3-8 minutes)';
             } else {
                 document.getElementById('loadingMessage').textContent = 'fetching your albums...';
                 document.getElementById('loadingDetail').textContent = 'this will take 1-2 minutes';

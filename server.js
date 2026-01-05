@@ -504,60 +504,70 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  ✓ Total fetched: ${allAlbums.length} albums from Last.fm`);
       console.log(`  🔍 Looking up release years for filtered search...`);
 
-      const processedAlbums = [];
+      const mergedAlbums = new Map();
       
+      console.log(`  🔍 Aggregating duplicates and looking up metadata...`);
+
       for (let i = 0; i < allAlbums.length; i++) {
         const a = allAlbums[i];
-        
-        // Get MusicBrainz data for release year
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let shouldInclude = true;
-        
-        // Apply filters
-        if (year && mbData.release_year !== year) {
-          shouldInclude = false;
-        }
-        
+        if (year && mbData.release_year !== year) shouldInclude = false;
         if (decade) {
           const decadeEnd = decade + 9;
-          if (!mbData.release_year || mbData.release_year < decade || mbData.release_year > decadeEnd) {
-            shouldInclude = false;
-          }
+          if (!mbData.release_year || (mbData.release_year < decade || mbData.release_year > decadeEnd)) shouldInclude = false;
         }
-        
         if (yearStart && yearEnd) {
-          if (!mbData.release_year || mbData.release_year < yearStart || mbData.release_year > yearEnd) {
-            shouldInclude = false;
-          }
+          if (!mbData.release_year || (mbData.release_year < yearStart || mbData.release_year > yearEnd)) shouldInclude = false;
         }
         
         if (shouldInclude) {
-          processedAlbums.push({
-            name: mbData.canonical_name || a.name,
-            artist: mbData.canonical_artist || a.artist.name,
-            playcount: parseInt(a.playcount),
-            url: a.url,
-            image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-            release_year: mbData.release_year,
-            musicbrainz_id: mbData.musicbrainz_id,
-            type: mbData.type
-          });
+          // We group by MusicBrainz ID to catch different versions of the same album
+          const key = mbData.musicbrainz_id;
+          const currentPlays = parseInt(a.playcount);
+          const currentImage = a.image.find(img => img.size === 'extralarge')?.['#text'] || '';
+          const currentName = a.name;
+
+          if (mergedAlbums.has(key)) {
+            const existing = mergedAlbums.get(key);
+            existing.playcount += currentPlays;
+
+            // ART PREFERENCE LOGIC: 
+            // If the current stored version is a "Deluxe/Edition" and this new version 
+            // is "Standard" (doesn't contain those keywords), swap to the standard art.
+            const deluxeRegex = /deluxe|edition|expanded|anniversary|remaster|bonus/i;
+            if (deluxeRegex.test(existing.rawName) && !deluxeRegex.test(currentName)) {
+              existing.image = currentImage;
+              existing.rawName = currentName;
+            }
+          } else {
+            mergedAlbums.set(key, {
+              name: mbData.canonical_name || a.name,
+              rawName: currentName, // Store this to check against deluxe keywords later
+              artist: mbData.canonical_artist || a.artist.name,
+              playcount: currentPlays,
+              url: a.url,
+              image: currentImage,
+              release_year: mbData.release_year,
+              musicbrainz_id: mbData.musicbrainz_id,
+              type: mbData.type
+            });
+          }
         }
         
-        // Stop once we have enough matches
-        if (processedAlbums.length >= limit) {
-          console.log(`  ✓ Found ${limit} matching albums, stopping search`);
-          break;
-        }
-        
-        // Progress updates every 10 albums
-        if ((i + 1) % 10 === 0) {
-          console.log(`    Processed ${i + 1}/${allAlbums.length} albums, found ${processedAlbums.length} matches`);
+        // Progress updates
+        if ((i + 1) % 50 === 0) {
+          console.log(`    Processed ${i + 1}/${allAlbums.length} albums, found ${mergedAlbums.size} unique matches`);
         }
       }
 
-      console.log(`  ✅ Returning ${processedAlbums.length} albums`);
+      // Convert the Map to an array, sort by the new combined playcounts, and apply the limit
+      const processedAlbums = Array.from(mergedAlbums.values())
+        .sort((a, b) => b.playcount - a.playcount)
+        .slice(0, limit);
+
+      console.log(`  ✅ Returning ${processedAlbums.length} unique albums`);
 
       return res.json({
         user: username,
