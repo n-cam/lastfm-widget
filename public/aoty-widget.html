@@ -226,8 +226,8 @@
         const username = urlParams.get('user') || 'nikzx';
         
         // API endpoint - change this to your Render URL
-        const API_URL = 'https://lastfm-widget.onrender.com/.com/api/top-albums';
-
+        const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
+git 
         async function loadAlbums() {
             try {
                 const url = `${API_URL}?user=${username}&year=${year}&limit=${limit}`;
