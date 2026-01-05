@@ -17,7 +17,12 @@
         body {
             font-family: 'Martian Mono', monospace;
             background: transparent;
-            padding:git 12px;
+            padding: 12px;
+        }
+
+        .widget-container {
+            width: 100%;
+            max-width: 100%;
         }
 
         .widget-container {
@@ -26,11 +31,14 @@
         }
 
         .widget-header {
-            display: none;
+            margin-bottom: 20px;
         }
 
         .widget-title {
-            display: none;
+            font-size: 24px;
+            font-weight: 700;
+            color: #4A1DC0;
+            margin-bottom: 8px;
         }
 
         .widget-subtitle {
@@ -226,7 +234,7 @@
                     document.getElementById('noResults').style.display = 'block';
                     document.getElementById('widgetTitle').textContent = `${year} albums`;
                     document.getElementById('widgetSubtitle').textContent = 'no albums found';
-                } // <--- THIS WAS MISSING
+                } 
 
             } catch (err) {
                 console.error('Error loading albums:', err);
