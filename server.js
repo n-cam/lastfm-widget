@@ -504,88 +504,76 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  ✓ Total fetched: ${allAlbums.length} albums from Last.fm`);
       console.log(`  🔍 Looking up release years for filtered search...`);
 
-      const mergedAlbums = new Map();
-      let totalScanned = 0;
-
-      console.log(`  🔍 Real-time scan: filling top ${limit} unique slots...`);
-
+      const processedAlbums = [];
+      
       for (let i = 0; i < allAlbums.length; i++) {
-        totalScanned++;
         const a = allAlbums[i];
         
-        // 1. Get metadata (MusicBrainz)
+        // Get MusicBrainz data for release year
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let shouldInclude = true;
-        // Apply your existing filters (Year/Decade)
-        if (year && mbData.release_year !== year) shouldInclude = false;
+        
+        // Apply filters
+        if (year && mbData.release_year !== year) {
+          shouldInclude = false;
+        }
+        
         if (decade) {
           const decadeEnd = decade + 9;
-          if (!mbData.release_year || (mbData.release_year < decade || mbData.release_year > decadeEnd)) shouldInclude = false;
+          if (!mbData.release_year || mbData.release_year < decade || mbData.release_year > decadeEnd) {
+            shouldInclude = false;
+          }
+        }
+        
+        if (yearStart && yearEnd) {
+          if (!mbData.release_year || mbData.release_year < yearStart || mbData.release_year > yearEnd) {
+            shouldInclude = false;
+          }
         }
         
         if (shouldInclude) {
-          const key = mbData.musicbrainz_id;
-          const currentPlays = parseInt(a.playcount);
-          const currentImage = a.image.find(img => img.size === 'extralarge')?.['#text'] || '';
-
-          if (mergedAlbums.has(key)) {
-            // MERGE: We found a second version of an album already in our Top List
-            const existing = mergedAlbums.get(key);
-            existing.playcount += currentPlays;
-
-            // Art preference: Swap if this version is "Standard" and current is "Deluxe"
-            const deluxeRegex = /deluxe|edition|expanded|anniversary|remaster|bonus/i;
-            if (deluxeRegex.test(existing.rawName) && !deluxeRegex.test(a.name)) {
-              existing.image = currentImage;
-              existing.rawName = a.name;
-            }
-          } else {
-            // NEW SLOT: Only add if we haven't hit the limit yet
-            if (mergedAlbums.size < limit) {
-              mergedAlbums.set(key, {
-                name: mbData.canonical_name || a.name,
-                rawName: a.name,
-                artist: mbData.canonical_artist || a.artist.name,
-                playcount: currentPlays,
-                url: a.url,
-                image: currentImage,
-                release_year: mbData.release_year,
-                musicbrainz_id: mbData.musicbrainz_id
-              });
-            }
-          }
+          processedAlbums.push({
+            name: mbData.canonical_name || a.name,
+            artist: mbData.canonical_artist || a.artist.name,
+            playcount: parseInt(a.playcount),
+            url: a.url,
+            image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+            release_year: mbData.release_year,
+            musicbrainz_id: mbData.musicbrainz_id,
+            type: mbData.type
+          });
         }
-
-        // 2. BREAK CONDITION: We have filled all slots
-        // AND we've checked at least one extra album to see if it's a duplicate of the last slot
-        if (mergedAlbums.size >= limit) {
-           // Small "look ahead" of 2 albums to catch immediate duplicates (Standard vs Deluxe)
-           // ranked right next to each other.
-           if (i >= totalScanned + 2 || i >= allAlbums.length - 1) {
-             console.log(`  ✓ Top ${limit} unique slots filled. Total scanned: ${totalScanned}`);
-             break;
-           }
+        
+        // Stop once we have enough matches
+        if (processedAlbums.length >= limit) {
+          console.log(`  ✓ Found ${limit} matching albums, stopping search`);
+          break;
+        }
+        
+        // Progress updates every 10 albums
+        if ((i + 1) % 10 === 0) {
+          console.log(`    Processed ${i + 1}/${allAlbums.length} albums, found ${processedAlbums.length} matches`);
         }
       }
 
-      // Final sort (in case merges changed the order)
-      const processedAlbums = Array.from(mergedAlbums.values())
-        .sort((a, b) => b.playcount - a.playcount);
+      console.log(`  ✅ Returning ${processedAlbums.length} albums`);
 
       return res.json({
         user: username,
         mode: 'realtime',
+        filters: { year, decade, yearStart, yearEnd },
+        count: processedAlbums.length,
+        scanned: allAlbums.length,
         albums: processedAlbums
       });
+
     } catch (err) {
       console.error('Real-time fetch error:', err);
-      return res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Real-time fetch failed' });
     }
-  } 
-
-  // Use cache for cached users (This should now be OUTSIDE the if block)
-  console.log(`💾 Using cache for ${username}`);
+    return;
+  }
   
   const year = req.query.year ? parseInt(req.query.year) : null;
   const decade = req.query.decade ? parseInt(req.query.decade) : null;
@@ -638,26 +626,11 @@ app.get('/api/top-albums', async (req, res) => {
       mode: 'cached',
       filters: { year, decade, yearStart, yearEnd, artist },
       count: albums.length,
-      user_info: {
-        total_albums: user.total_albums,
-        last_update_full: user.last_update_full,
-        last_update_recent: user.last_update_recent
-      },
-      albums: albums.map(a => ({
-        name: a.canonical_album || a.album_name,
-        artist: a.canonical_artist || a.artist_name,
-        playcount: a.playcount,
-        url: a.lastfm_url,
-        image: a.image_url,
-        release_year: a.release_year,
-        musicbrainz_id: a.musicbrainz_id,
-        type: a.album_type
-      }))
+      albums: albums
     });
-
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Query failed', details: err.message });
+    res.status(500).json({ error: 'Query failed' });
   }
 });
 
@@ -742,17 +715,14 @@ app.get('/api/update', async (req, res) => {
     res.json({
       success: true,
       username,
-      update_type: full ? 'full' : 'recent',
-      albums_fetched: albums.length,
-      albums_updated: updated,
-      total_cached: updated
+      albums_updated: updated
     });
 
   } catch (err) {
     console.error('Update error:', err);
     res.status(500).json({ error: 'Update failed', details: err.message });
   }
-});
+}); // <--- Fix #4: This closes the Update Route correctly
 
 // Cache stats
 app.get('/api/cache/stats', async (req, res) => {
@@ -785,8 +755,8 @@ app.get('/api/cache/stats', async (req, res) => {
       created_at: user.created_at
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Query failed', details: err.message });
+    console.error('Stats query error:', err);
+    res.status(500).json({ error: 'Stats query failed' });
   }
 });
 
