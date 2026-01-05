@@ -1,57 +1,140 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = require('node-fetch');
-const Database = require('better-sqlite3');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// List of users who get persistent caching (add your username here!)
+// Database setup - use PostgreSQL if DATABASE_URL exists, otherwise SQLite
+let db;
+let dbType;
+
+if (process.env.DATABASE_URL) {
+  // PostgreSQL for production (Render)
+  console.log('🐘 Using PostgreSQL database');
+  const { Pool } = require('pg');
+  db = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  });
+  dbType = 'postgres';
+} else {
+  // SQLite for local development
+  console.log('💾 Using SQLite database');
+  const Database = require('better-sqlite3');
+  db = new Database('database.db');
+  db.pragma('journal_mode = WAL');
+  dbType = 'sqlite';
+}
+
+// List of users who get persistent caching
 const CACHED_USERS = (process.env.CACHED_USERS || '').split(',').filter(Boolean);
 
-// Initialize SQLite database (only for cached users)
-const db = new Database('database.db');
-db.pragma('journal_mode = WAL');
+// Initialize database tables
+async function initDatabase() {
+  if (dbType === 'postgres') {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        username TEXT PRIMARY KEY,
+        last_update_full TIMESTAMP,
+        last_update_recent TIMESTAMP,
+        total_albums INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    last_update_full TEXT,
-    last_update_recent TEXT,
-    total_albums INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
+      CREATE TABLE IF NOT EXISTS albums (
+        id SERIAL PRIMARY KEY,
+        username TEXT NOT NULL,
+        album_name TEXT NOT NULL,
+        artist_name TEXT NOT NULL,
+        playcount INTEGER DEFAULT 0,
+        release_year INTEGER,
+        musicbrainz_id TEXT,
+        canonical_album TEXT,
+        canonical_artist TEXT,
+        image_url TEXT,
+        lastfm_url TEXT,
+        album_type TEXT,
+        last_scrobble TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username, musicbrainz_id)
+      );
 
-  CREATE TABLE IF NOT EXISTS albums (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL,
-    album_name TEXT NOT NULL,
-    artist_name TEXT NOT NULL,
-    playcount INTEGER DEFAULT 0,
-    release_year INTEGER,
-    musicbrainz_id TEXT,
-    canonical_album TEXT,
-    canonical_artist TEXT,
-    image_url TEXT,
-    lastfm_url TEXT,
-    album_type TEXT,
-    last_scrobble TEXT,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(username, musicbrainz_id)
-  );
+      CREATE INDEX IF NOT EXISTS idx_username ON albums(username);
+      CREATE INDEX IF NOT EXISTS idx_release_year ON albums(release_year);
+      CREATE INDEX IF NOT EXISTS idx_playcount ON albums(playcount);
+    `);
+  } else {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        username TEXT PRIMARY KEY,
+        last_update_full TEXT,
+        last_update_recent TEXT,
+        total_albums INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
 
-  CREATE INDEX IF NOT EXISTS idx_username ON albums(username);
-  CREATE INDEX IF NOT EXISTS idx_release_year ON albums(release_year);
-  CREATE INDEX IF NOT EXISTS idx_playcount ON albums(playcount);
-`);
+      CREATE TABLE IF NOT EXISTS albums (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        album_name TEXT NOT NULL,
+        artist_name TEXT NOT NULL,
+        playcount INTEGER DEFAULT 0,
+        release_year INTEGER,
+        musicbrainz_id TEXT,
+        canonical_album TEXT,
+        canonical_artist TEXT,
+        image_url TEXT,
+        lastfm_url TEXT,
+        album_type TEXT,
+        last_scrobble TEXT,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username, musicbrainz_id)
+      );
 
-console.log('✅ Database initialized');
-console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
+      CREATE INDEX IF NOT EXISTS idx_username ON albums(username);
+      CREATE INDEX IF NOT EXISTS idx_release_year ON albums(release_year);
+      CREATE INDEX IF NOT EXISTS idx_playcount ON albums(playcount);
+    `);
+  }
+}
+
+// Database helper functions
+async function dbQuery(query, params = []) {
+  if (dbType === 'postgres') {
+    const result = await db.query(query, params);
+    return result.rows;
+  } else {
+    return db.prepare(query).all(...params);
+  }
+}
+
+async function dbGet(query, params = []) {
+  if (dbType === 'postgres') {
+    const result = await db.query(query, params);
+    return result.rows[0] || null;
+  } else {
+    return db.prepare(query).get(...params);
+  }
+}
+
+async function dbRun(query, params = []) {
+  if (dbType === 'postgres') {
+    await db.query(query, params);
+  } else {
+    db.prepare(query).run(...params);
+  }
+}
+
+// Initialize on startup
+initDatabase().then(() => {
+  console.log('✅ Database initialized');
+  console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
+});
 
 // In-memory cache for MusicBrainz lookups
 const mbCache = new Map();
 
-// Helper functions
+// Helper functions (same as before)
 function cleanAlbumName(name) {
   return name
     .replace(/\s*\(.*?(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty).*?\)/gi, '')
@@ -268,7 +351,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Root test
+// Root
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/public/index.html');
 });
@@ -278,81 +361,13 @@ function shouldUseCache(username) {
   return CACHED_USERS.includes(username);
 }
 
-// NEW: Real-time fetch for public users
-app.get('/api/top-albums-realtime', async (req, res) => {
-  const username = req.query.user;
-  const year = req.query.year ? parseInt(req.query.year) : null;
-  const decade = req.query.decade ? parseInt(req.query.decade) : null;
-  const yearStart = req.query.yearStart ? parseInt(req.query.yearStart) : null;
-  const yearEnd = req.query.yearEnd ? parseInt(req.query.yearEnd) : null;
-  const limit = req.query.limit ? parseInt(req.query.limit) : 50;
-
-  if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
-
-  console.log(`🔴 Real-time fetch for ${username} (limit: ${limit})`);
-
-  try {
-    // Fetch from Last.fm API
-    const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${limit}`;
-    
-    const response = await fetch(lastfmUrl);
-    const data = await response.json();
-
-    if (!data.topalbums || !data.topalbums.album) {
-      return res.status(404).json({ error: 'User not found or no albums' });
-    }
-
-    const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-
-    // Process albums with MusicBrainz lookup
-    const processedAlbums = [];
-    
-    for (const a of albums) {
-      const mbData = await getMusicBrainzData(a.artist.name, a.name);
-      
-      // Apply filters
-      if (year && mbData.release_year !== year) continue;
-      if (decade) {
-        const decadeEnd = decade + 9;
-        if (!mbData.release_year || mbData.release_year < decade || mbData.release_year > decadeEnd) continue;
-      }
-      if (yearStart && yearEnd) {
-        if (!mbData.release_year || mbData.release_year < yearStart || mbData.release_year > yearEnd) continue;
-      }
-
-      processedAlbums.push({
-        name: mbData.canonical_name || a.name,
-        artist: mbData.canonical_artist || a.artist.name,
-        playcount: parseInt(a.playcount),
-        url: a.url,
-        image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-        release_year: mbData.release_year,
-        musicbrainz_id: mbData.musicbrainz_id,
-        type: mbData.type
-      });
-    }
-
-    res.json({
-      user: username,
-      mode: 'realtime',
-      filters: { year, decade, yearStart, yearEnd },
-      count: processedAlbums.length,
-      albums: processedAlbums
-    });
-
-  } catch (err) {
-    console.error('Real-time fetch error:', err);
-    res.status(500).json({ error: 'Failed to fetch albums', details: err.message });
-  }
-});
-
 // Get top albums (hybrid: cache or real-time)
 app.get('/api/top-albums', async (req, res) => {
   const username = req.query.user;
 
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
 
-  // Route to real-time for non-cached users
+  // Real-time mode for non-cached users
   if (!shouldUseCache(username)) {
     console.log(`➡️  ${username} - using real-time mode`);
     
@@ -363,8 +378,6 @@ app.get('/api/top-albums', async (req, res) => {
     const limit = req.query.limit ? parseInt(req.query.limit) : 50;
 
     try {
-      // Always fetch a large pool for filtered queries to ensure we find matches
-      // even for obscure years/decades
       const hasFilter = year || decade || yearStart || yearEnd;
       const fetchLimit = hasFilter ? 1000 : Math.min(200, limit);
       
@@ -387,7 +400,6 @@ app.get('/api/top-albums', async (req, res) => {
       const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
       console.log(`  ✓ Got ${albums.length} albums from Last.fm (scanning for ${limit} matches)`);
 
-      // Process albums with MusicBrainz lookup for year data
       const processedAlbums = [];
       
       console.log(`  🔍 Looking up release years...`);
@@ -395,10 +407,8 @@ app.get('/api/top-albums', async (req, res) => {
       for (let i = 0; i < albums.length; i++) {
         const a = albums[i];
         
-        // Get release year from MusicBrainz
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
-        // Apply filters
         let shouldInclude = true;
         
         if (year && mbData.release_year !== year) {
@@ -431,12 +441,10 @@ app.get('/api/top-albums', async (req, res) => {
           });
         }
         
-        // Stop if we have enough albums
         if (processedAlbums.length >= limit) {
           break;
         }
         
-        // Progress indicator
         if ((i + 1) % 10 === 0) {
           console.log(`    Processed ${i + 1}/${albums.length} albums, found ${processedAlbums.length} matches`);
         }
@@ -469,32 +477,37 @@ app.get('/api/top-albums', async (req, res) => {
   const limit = req.query.limit ? parseInt(req.query.limit) : 50;
 
   try {
-    let query = `SELECT * FROM albums WHERE username = ?`;
+    let query = `SELECT * FROM albums WHERE username = $1`;
     const params = [username];
+    let paramIndex = 2;
 
     if (year) {
-      query += ` AND release_year = ?`;
+      query += ` AND release_year = $${paramIndex}`;
       params.push(year);
+      paramIndex++;
     } else if (decade) {
       const decadeStart = decade;
       const decadeEnd = decade + 9;
-      query += ` AND release_year BETWEEN ? AND ?`;
+      query += ` AND release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
       params.push(decadeStart, decadeEnd);
+      paramIndex += 2;
     } else if (yearStart && yearEnd) {
-      query += ` AND release_year BETWEEN ? AND ?`;
+      query += ` AND release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
       params.push(yearStart, yearEnd);
+      paramIndex += 2;
     }
 
     if (artist) {
-      query += ` AND (LOWER(artist_name) LIKE ? OR LOWER(canonical_artist) LIKE ?)`;
+      query += ` AND (LOWER(artist_name) LIKE $${paramIndex} OR LOWER(canonical_artist) LIKE $${paramIndex + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
+      paramIndex += 2;
     }
 
-    query += ` ORDER BY playcount DESC LIMIT ?`;
+    query += ` ORDER BY playcount DESC LIMIT $${paramIndex}`;
     params.push(limit);
 
-    const albums = db.prepare(query).all(...params);
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    const albums = await dbQuery(query, params);
+    const user = await dbGet('SELECT * FROM users WHERE username = $1', [username]);
 
     if (!user) {
       return res.status(404).json({ 
@@ -540,7 +553,7 @@ app.get('/api/update', async (req, res) => {
 
   if (!shouldUseCache(username)) {
     return res.status(403).json({ 
-      error: 'Cache updates are only available for specific users. Public users get real-time data automatically.' 
+      error: 'Cache updates are only available for specific users.' 
     });
   }
 
@@ -550,8 +563,7 @@ app.get('/api/update', async (req, res) => {
   console.log(`   Estimated time: ${estimatedMinutes} minutes`);
 
   try {
-    const insertUser = db.prepare(`INSERT OR IGNORE INTO users (username) VALUES (?)`);
-    insertUser.run(username);
+    await dbRun(`INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`, [username]);
 
     const albums = await fetchAllAlbums(username, limit);
 
@@ -561,26 +573,25 @@ app.get('/api/update', async (req, res) => {
 
     console.log(`✅ Total fetched: ${albums.length} albums from Last.fm`);
 
-    const upsertAlbum = db.prepare(`
-      INSERT INTO albums (
-        username, album_name, artist_name, playcount, 
-        release_year, musicbrainz_id, canonical_album, canonical_artist,
-        image_url, lastfm_url, album_type, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(username, musicbrainz_id) 
-      DO UPDATE SET 
-        playcount = excluded.playcount,
-        updated_at = CURRENT_TIMESTAMP
-    `);
-
     let updated = 0;
-    let errors = 0;
 
     for (const a of albums) {
       try {
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
-        upsertAlbum.run(
+        const query = `
+          INSERT INTO albums (
+            username, album_name, artist_name, playcount, 
+            release_year, musicbrainz_id, canonical_album, canonical_artist,
+            image_url, lastfm_url, album_type, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+          ON CONFLICT(username, musicbrainz_id) 
+          DO UPDATE SET 
+            playcount = EXCLUDED.playcount,
+            updated_at = CURRENT_TIMESTAMP
+        `;
+        
+        await dbRun(query, [
           username,
           a.name,
           a.artist.name,
@@ -592,20 +603,21 @@ app.get('/api/update', async (req, res) => {
           a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
           a.url,
           mbData.type
-        );
+        ]);
+        
         updated++;
       } catch (err) {
-        errors++;
+        console.error(`Error processing album:`, err.message);
       }
     }
 
-    const updateUser = db.prepare(`
+    const updateQuery = `
       UPDATE users 
       SET ${full ? 'last_update_full' : 'last_update_recent'} = CURRENT_TIMESTAMP,
-          total_albums = (SELECT COUNT(*) FROM albums WHERE username = ?)
-      WHERE username = ?
-    `);
-    updateUser.run(username, username);
+          total_albums = (SELECT COUNT(*) FROM albums WHERE username = $1)
+      WHERE username = $1
+    `;
+    await dbRun(updateQuery, [username]);
 
     console.log(`✅ Update complete: ${updated} updated`);
 
@@ -624,8 +636,8 @@ app.get('/api/update', async (req, res) => {
   }
 });
 
-// Cache stats (only for cached users)
-app.get('/api/cache/stats', (req, res) => {
+// Cache stats
+app.get('/api/cache/stats', async (req, res) => {
   const username = req.query.user;
 
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
@@ -638,21 +650,26 @@ app.get('/api/cache/stats', (req, res) => {
     });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  const albumCount = db.prepare('SELECT COUNT(*) as count FROM albums WHERE username = ?').get(username);
+  try {
+    const user = await dbGet('SELECT * FROM users WHERE username = $1', [username]);
+    const albumCount = await dbGet('SELECT COUNT(*) as count FROM albums WHERE username = $1', [username]);
 
-  if (!user) {
-    return res.status(404).json({ error: 'User not found in cache' });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found in cache' });
+    }
+
+    res.json({
+      username: user.username,
+      mode: 'cached',
+      total_albums: albumCount.count,
+      last_update_full: user.last_update_full,
+      last_update_recent: user.last_update_recent,
+      created_at: user.created_at
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Query failed', details: err.message });
   }
-
-  res.json({
-    username: user.username,
-    mode: 'cached',
-    total_albums: albumCount.count,
-    last_update_full: user.last_update_full,
-    last_update_recent: user.last_update_recent,
-    created_at: user.created_at
-  });
 });
 
 // Start server
@@ -660,11 +677,7 @@ app.listen(PORT, () => {
   console.log(`\n🎵 Last.fm Top Albums API Server`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`\n📍 Server: http://localhost:${PORT}`);
+  console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
   console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
-  console.log(`🔴 Public users: real-time mode (no cache required)`);
-  console.log(`\n📝 ENDPOINTS:`);
-  console.log(`   • Top albums:   /api/top-albums?user=username&year=2020`);
-  console.log(`   • Cache update: /api/update?user=username&full=true (cached users only)`);
-  console.log(`   • Cache stats:  /api/cache/stats?user=username`);
-  console.log(`\n💡 TIP: Add your username to CACHED_USERS env var for persistent caching\n`);
+  console.log(`🔴 Public users: real-time mode\n`);
 });
