@@ -17,7 +17,7 @@
         body {
             font-family: 'Martian Mono', monospace;
             background: transparent;
-            padding: 0;
+            padding: 0 12px;
         }
 
         .widget-container {
@@ -26,20 +26,15 @@
         }
 
         .widget-header {
-            margin-bottom: 20px;
+            display: none;
         }
 
         .widget-title {
-            font-size: 24px;
-            font-weight: 700;
-            color: #4A1DC0;
-            margin-bottom: 8px;
+            display: none;
         }
 
         .widget-subtitle {
-            font-size: 12px;
-            color: #4A1DC0;
-            opacity: 0.7;
+            display: none;
         }
 
         .loading {
@@ -82,11 +77,11 @@
 
         .album-card {
             background: white;
-            border: 3px solid #4A1DC0;
+            border: 2px solid #4A1DC0;
             border-radius: 12px;
             overflow: hidden;
             transition: all 0.2s;
-            box-shadow: 4px 4px 0 #4A1DC0;
+            box-shadow: 2px 4px 0 #4A1DC0;
             cursor: pointer;
         }
 
@@ -131,27 +126,15 @@
         }
 
         .album-meta {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 9px;
-            padding-top: 6px;
-            border-top: 2px solid #C4E0E0;
-            gap: 6px;
+            display: none;
         }
 
         .album-rank {
-            background: #4A1DC0;
-            color: white;
-            padding: 2px 6px;
-            font-weight: 700;
-            border-radius: 4px;
-            display: inline-block;
+            display: none;
         }
 
         .album-playcount {
-            color: #4A1DC0;
-            font-weight: 700;
+            display: none;
         }
 
         .no-results {
@@ -162,21 +145,15 @@
         }
 
         .powered-by {
-            text-align: center;
-            margin-top: 20px;
-            font-size: 10px;
-            color: #4A1DC0;
-            opacity: 0.6;
+            display: none;
         }
 
         .powered-by a {
-            color: #4A1DC0;
-            text-decoration: none;
-            font-weight: 700;
+            display: none;
         }
 
         .powered-by a:hover {
-            text-decoration: underline;
+            display: none;
         }
 
         /* Responsive */
@@ -227,7 +204,7 @@
         
         // API endpoint - change this to your Render URL
         const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
-        
+
         async function loadAlbums() {
             try {
                 const url = `${API_URL}?user=${username}&year=${year}&limit=${limit}`;
@@ -244,12 +221,8 @@
 
                 if (data.albums && data.albums.length > 0) {
                     displayAlbums(data.albums);
-                    document.getElementById('widgetTitle').textContent = `top ${data.albums.length} albums of ${year}`;
-                    document.getElementById('widgetSubtitle').textContent = `based on ${data.user}'s scrobbles`;
                 } else {
                     document.getElementById('noResults').style.display = 'block';
-                    document.getElementById('widgetTitle').textContent = `${year} albums`;
-                    document.getElementById('widgetSubtitle').textContent = 'no albums found';
                 }
 
             } catch (err) {
@@ -281,10 +254,6 @@
                     <div class="album-info">
                         <div class="album-name" title="${album.name}">${album.name}</div>
                         <div class="album-artist" title="${album.artist}">${album.artist}</div>
-                        <div class="album-meta">
-                            <span class="album-rank">#${index + 1}</span>
-                            <span class="album-playcount">${album.playcount} plays</span>
-                        </div>
                     </div>
                 `;
 
