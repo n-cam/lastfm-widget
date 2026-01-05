@@ -573,7 +573,18 @@ app.get('/api/top-albums', async (req, res) => {
       const processedAlbums = Array.from(mergedAlbums.values())
         .sort((a, b) => b.playcount - a.playcount);
 
-  // Use cache for cached users
+      return res.json({
+        user: username,
+        mode: 'realtime',
+        albums: processedAlbums
+      });
+    } catch (err) {
+      console.error('Real-time fetch error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  } 
+
+  // Use cache for cached users (This should now be OUTSIDE the if block)
   console.log(`💾 Using cache for ${username}`);
   
   const year = req.query.year ? parseInt(req.query.year) : null;
