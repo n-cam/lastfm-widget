@@ -505,98 +505,73 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  🔍 Looking up release years for filtered search...`);
 
       const mergedAlbums = new Map();
-      
-      console.log(`  🔍 Aggregating duplicates and looking up metadata...`);
+      let totalScanned = 0;
+
+      console.log(`  🔍 Real-time scan: filling top ${limit} unique slots...`);
 
       for (let i = 0; i < allAlbums.length; i++) {
+        totalScanned++;
         const a = allAlbums[i];
+        
+        // 1. Get metadata (MusicBrainz)
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let shouldInclude = true;
+        // Apply your existing filters (Year/Decade)
         if (year && mbData.release_year !== year) shouldInclude = false;
         if (decade) {
           const decadeEnd = decade + 9;
           if (!mbData.release_year || (mbData.release_year < decade || mbData.release_year > decadeEnd)) shouldInclude = false;
         }
-        if (yearStart && yearEnd) {
-          if (!mbData.release_year || (mbData.release_year < yearStart || mbData.release_year > yearEnd)) shouldInclude = false;
-        }
         
         if (shouldInclude) {
-          // We group by MusicBrainz ID to catch different versions of the same album
           const key = mbData.musicbrainz_id;
           const currentPlays = parseInt(a.playcount);
           const currentImage = a.image.find(img => img.size === 'extralarge')?.['#text'] || '';
-          const currentName = a.name;
 
           if (mergedAlbums.has(key)) {
+            // MERGE: We found a second version of an album already in our Top List
             const existing = mergedAlbums.get(key);
             existing.playcount += currentPlays;
 
-            // ART PREFERENCE LOGIC: 
-            // If the current stored version is a "Deluxe/Edition" and this new version 
-            // is "Standard" (doesn't contain those keywords), swap to the standard art.
+            // Art preference: Swap if this version is "Standard" and current is "Deluxe"
             const deluxeRegex = /deluxe|edition|expanded|anniversary|remaster|bonus/i;
-            if (deluxeRegex.test(existing.rawName) && !deluxeRegex.test(currentName)) {
+            if (deluxeRegex.test(existing.rawName) && !deluxeRegex.test(a.name)) {
               existing.image = currentImage;
-              existing.rawName = currentName;
+              existing.rawName = a.name;
             }
           } else {
-            mergedAlbums.set(key, {
-              name: mbData.canonical_name || a.name,
-              rawName: currentName, // Store this to check against deluxe keywords later
-              artist: mbData.canonical_artist || a.artist.name,
-              playcount: currentPlays,
-              url: a.url,
-              image: currentImage,
-              release_year: mbData.release_year,
-              musicbrainz_id: mbData.musicbrainz_id,
-              type: mbData.type
-            });
+            // NEW SLOT: Only add if we haven't hit the limit yet
+            if (mergedAlbums.size < limit) {
+              mergedAlbums.set(key, {
+                name: mbData.canonical_name || a.name,
+                rawName: a.name,
+                artist: mbData.canonical_artist || a.artist.name,
+                playcount: currentPlays,
+                url: a.url,
+                image: currentImage,
+                release_year: mbData.release_year,
+                musicbrainz_id: mbData.musicbrainz_id
+              });
+            }
           }
         }
-        
-        // Progress updates
-        if ((i + 1) % 50 === 0) {
-          console.log(`    Processed ${i + 1}/${allAlbums.length} albums, found ${mergedAlbums.size} unique matches`);
+
+        // 2. BREAK CONDITION: We have filled all slots
+        // AND we've checked at least one extra album to see if it's a duplicate of the last slot
+        if (mergedAlbums.size >= limit) {
+           // Small "look ahead" of 2 albums to catch immediate duplicates (Standard vs Deluxe)
+           // ranked right next to each other.
+           if (i >= totalScanned + 2 || i >= allAlbums.length - 1) {
+             console.log(`  ✓ Top ${limit} unique slots filled. Total scanned: ${totalScanned}`);
+             break;
+           }
         }
       }
 
-      // Convert the Map to an array, sort by the new combined playcounts, and apply the limit
+      // Final sort (in case merges changed the order)
       const processedAlbums = Array.from(mergedAlbums.values())
-        .sort((a, b) => b.playcount - a.playcount)
-        .slice(0, limit);
-
-      console.log(`  ✅ Returning ${processedAlbums.length} unique albums`);
-
-      return res.json({
-        user: username,
-        mode: 'realtime',
-        filters: { year, decade, yearStart, yearEnd },
-        count: processedAlbums.length,
-        scanned: allAlbums.length,
-        albums: processedAlbums
-      });
-
-    } catch (err) {
-      console.error('Real-time fetch error:', err);
-      
-      // Check if it's a Last.fm API error
-      if (err.message.includes('User not found')) {
-        return res.status(404).json({ 
-          error: 'Last.fm user not found', 
-          details: 'Please check the username is correct',
-          username: username
-        });
-      }
-      
-      return res.status(500).json({ 
-        error: 'Failed to fetch albums', 
-        details: err.message,
-        hint: 'Last.fm API may be temporarily unavailable. Please try again in a moment.'
-      });
-    }
-  }
+        .sort((a, b) => b.playcount - a.playcount);
 
   // Use cache for cached users
   console.log(`💾 Using cache for ${username}`);
