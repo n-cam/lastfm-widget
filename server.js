@@ -382,7 +382,7 @@ app.get('/api/top-albums', async (req, res) => {
       
       // For filtered queries, we need to scan more albums to find matches
       // But we'll do it in smaller chunks to avoid timeouts
-      const maxAlbumsToScan = hasFilter ? 1000 : 200;
+      const maxAlbumsToScan = hasFilter ? 500 : 200;
       const perPage = 500; // Last.fm's max per request
       const pagesToFetch = Math.ceil(maxAlbumsToScan / perPage);
       
