@@ -356,7 +356,7 @@
 
         .album-card {
             background: white;
-            border: 2px solid var(--primary);
+            border: 3px solid var(--primary);
             border-radius: 12px;
             overflow: hidden;
             cursor: pointer;
@@ -371,18 +371,13 @@
         }
 
         .album-rank {
-            position: absolute;
-            top: 8px;
-            left: 8px;
             background: var(--primary);
             color: white;
-            padding: 4px 8px;
+            padding: 4px 10px;
             font-weight: 700;
             font-size: 11px;
-            z-index: 1;
             border-radius: 4px;
-            border: 2px solid white;
-            box-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+            display: inline-block;
         }
 
         .album-cover {
@@ -427,6 +422,7 @@
             font-size: 10px;
             padding-top: 8px;
             border-top: 2px solid var(--base);
+            gap: 8px;
         }
 
         .album-playcount {
@@ -589,21 +585,16 @@
                     <div class="form-section">
                         <label for="limit">Show:</label>
                         <select id="limit">
-                            <option value="10">top 10</option>
+                            <option value="5">top 5</option>
+                            <option value="10" selected>top 10</option>
                             <option value="25">top 25</option>
-                            <option value="50" selected>top 50</option>
+                            <option value="50">top 50</option>
                             <option value="100">top 100</option>
                         </select>
                     </div>
                 </div>
 
                 <button type="submit" id="submitBtn">🔍 get top albums</button>
-
-                <div class="info-bar">
-                    💡 <strong>first time?</strong> 
-                    <a href="#" id="updateLink">update your cache first</a> 
-                    (takes ~20-100 min depending on library size)
-                </div>
             </form>
         </div>
 
@@ -628,7 +619,8 @@
         <div id="loading" class="section" style="display: none;">
             <div class="loading">
                 <div class="loading-spinner"></div>
-                <p>fetching your albums...</p>
+                <p id="loadingMessage">fetching your albums...</p>
+                <p id="loadingDetail" style="font-size: 11px; opacity: 0.7; margin-top: 8px;"></p>
             </div>
         </div>
 
@@ -665,9 +657,9 @@
     </div>
 
     <script>
-        const API_URL = '/api/top-albums';
-        const STATS_URL = '/api/cache/stats';
-        const UPDATE_URL = '/api/update';
+        const API_URL = 'https://your-lastfm-api.herokuapp.com/api/top-albums';
+        const STATS_URL = 'https://your-lastfm-api.herokuapp.com/api/cache/stats';
+        const UPDATE_URL = 'https://your-lastfm-api.herokuapp.com/api/update';
 
         let currentAlbums = [];
         let currentSort = 'playcount';
@@ -683,17 +675,6 @@
                 const filterSection = document.getElementById(filterId);
                 if (filterSection) filterSection.classList.add('active');
             });
-        });
-
-        // Update link
-        document.getElementById('updateLink').addEventListener('click', (e) => {
-            e.preventDefault();
-            const username = document.getElementById('username').value.trim();
-            if (!username) {
-                alert('please enter your last.fm username first');
-                return;
-            }
-            window.open(`${UPDATE_URL}?user=${username}&full=true`, '_blank');
         });
 
         // Form submit
@@ -731,6 +712,15 @@
             hideAll();
             document.getElementById('loading').style.display = 'block';
             document.getElementById('submitBtn').disabled = true;
+            
+            // Update loading message based on filters
+            if (activeFilter !== 'all') {
+                document.getElementById('loadingMessage').textContent = 'scanning your top 1000 albums...';
+                document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~5-10 minutes)';
+            } else {
+                document.getElementById('loadingMessage').textContent = 'fetching your albums...';
+                document.getElementById('loadingDetail').textContent = 'this will take 1-2 minutes';
+            }
 
             try {
                 await fetchStats(username);
@@ -738,7 +728,8 @@
                 const response = await fetch(url);
                 
                 if (!response.ok) {
-                    throw new Error('failed to fetch albums. update your cache first!');
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
                 }
 
                 const data = await response.json();
@@ -777,10 +768,24 @@
                 const response = await fetch(`${STATS_URL}?user=${username}`);
                 if (response.ok) {
                     const data = await response.json();
+                    
+                    // Check if user is in realtime mode
+                    if (data.mode === 'realtime') {
+                        console.log('User is in real-time mode (no cache)');
+                        document.getElementById('statsCard').style.display = 'none';
+                        return;
+                    }
+                    
                     updateStatsCard(data);
+                } else {
+                    // If stats fail, just hide the card - don't block the user
+                    console.log('Could not fetch stats, continuing anyway');
+                    document.getElementById('statsCard').style.display = 'none';
                 }
             } catch (err) {
                 console.error('failed to fetch stats:', err);
+                // Hide stats card if it fails
+                document.getElementById('statsCard').style.display = 'none';
             }
         }
 
@@ -841,7 +846,6 @@
                 card.onclick = () => window.open(album.url, '_blank');
 
                 card.innerHTML = `
-                    <div class="album-rank">#${index + 1}</div>
                     <img 
                         src="${album.image || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
                         alt="${album.name}"
@@ -852,6 +856,7 @@
                         <div class="album-name" title="${album.name}">${album.name}</div>
                         <div class="album-artist" title="${album.artist}">${album.artist}</div>
                         <div class="album-meta">
+                            <span class="album-rank">#${index + 1}</span>
                             <span class="album-playcount">${album.playcount.toLocaleString()} plays</span>
                             <span class="album-year">${album.release_year || '?'}</span>
                         </div>
@@ -873,6 +878,17 @@
             errorDiv.textContent = '⚠️ ' + message;
             errorDiv.style.display = 'block';
         }
+
+        // Auto-resize for WordPress iframe
+        function sendHeight() {
+            const height = document.documentElement.scrollHeight;
+            window.parent.postMessage({ type: 'resize', height: height }, '*');
+        }
+
+        // Send height on load and when content changes
+        window.addEventListener('load', sendHeight);
+        const observer = new MutationObserver(sendHeight);
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
     </script>
 </body>
 </html>

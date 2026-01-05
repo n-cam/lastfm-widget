@@ -352,20 +352,110 @@ app.get('/api/top-albums', async (req, res) => {
 
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
 
-  // Route to real-time endpoint for non-cached users
+  // Route to real-time for non-cached users
   if (!shouldUseCache(username)) {
-    console.log(`➡️  Routing ${username} to real-time fetch`);
-    return req.pipe(
-      require('http').request({
-        hostname: req.hostname,
-        port: PORT,
-        path: '/api/top-albums-realtime' + require('url').parse(req.url).search,
-        method: 'GET'
-      }, (response) => {
-        res.status(response.statusCode);
-        response.pipe(res);
-      })
-    );
+    console.log(`➡️  ${username} - using real-time mode`);
+    
+    const year = req.query.year ? parseInt(req.query.year) : null;
+    const decade = req.query.decade ? parseInt(req.query.decade) : null;
+    const yearStart = req.query.yearStart ? parseInt(req.query.yearStart) : null;
+    const yearEnd = req.query.yearEnd ? parseInt(req.query.yearEnd) : null;
+    const limit = req.query.limit ? parseInt(req.query.limit) : 50;
+
+    try {
+      // Always fetch a large pool for filtered queries to ensure we find matches
+      // even for obscure years/decades
+      const hasFilter = year || decade || yearStart || yearEnd;
+      const fetchLimit = hasFilter ? 1000 : Math.min(200, limit);
+      
+      const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${fetchLimit}`;
+      
+      console.log(`  📡 Fetching ${fetchLimit} albums from Last.fm API...`);
+      const response = await fetch(lastfmUrl);
+      
+      if (!response.ok) {
+        console.error(`  ❌ Last.fm API returned ${response.status}`);
+        return res.status(response.status).json({ error: 'Last.fm API error', status: response.status });
+      }
+      
+      const data = await response.json();
+
+      if (!data.topalbums || !data.topalbums.album) {
+        return res.status(404).json({ error: 'User not found or no albums' });
+      }
+
+      const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
+      console.log(`  ✓ Got ${albums.length} albums from Last.fm (scanning for ${limit} matches)`);
+
+      // Process albums with MusicBrainz lookup for year data
+      const processedAlbums = [];
+      
+      console.log(`  🔍 Looking up release years...`);
+      
+      for (let i = 0; i < albums.length; i++) {
+        const a = albums[i];
+        
+        // Get release year from MusicBrainz
+        const mbData = await getMusicBrainzData(a.artist.name, a.name);
+        
+        // Apply filters
+        let shouldInclude = true;
+        
+        if (year && mbData.release_year !== year) {
+          shouldInclude = false;
+        }
+        
+        if (decade) {
+          const decadeEnd = decade + 9;
+          if (!mbData.release_year || mbData.release_year < decade || mbData.release_year > decadeEnd) {
+            shouldInclude = false;
+          }
+        }
+        
+        if (yearStart && yearEnd) {
+          if (!mbData.release_year || mbData.release_year < yearStart || mbData.release_year > yearEnd) {
+            shouldInclude = false;
+          }
+        }
+        
+        if (shouldInclude) {
+          processedAlbums.push({
+            name: mbData.canonical_name || a.name,
+            artist: mbData.canonical_artist || a.artist.name,
+            playcount: parseInt(a.playcount),
+            url: a.url,
+            image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+            release_year: mbData.release_year,
+            musicbrainz_id: mbData.musicbrainz_id,
+            type: mbData.type
+          });
+        }
+        
+        // Stop if we have enough albums
+        if (processedAlbums.length >= limit) {
+          break;
+        }
+        
+        // Progress indicator
+        if ((i + 1) % 10 === 0) {
+          console.log(`    Processed ${i + 1}/${albums.length} albums, found ${processedAlbums.length} matches`);
+        }
+      }
+
+      console.log(`  ✓ Returning ${processedAlbums.length} albums`);
+
+      return res.json({
+        user: username,
+        mode: 'realtime',
+        filters: { year, decade, yearStart, yearEnd },
+        count: processedAlbums.length,
+        albums: processedAlbums
+      });
+
+    } catch (err) {
+      console.error('Real-time fetch error:', err);
+      return res.status(500).json({ error: 'Failed to fetch albums', details: err.message });
+    }
   }
 
   // Use cache for cached users
