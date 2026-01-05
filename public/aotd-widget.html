@@ -102,13 +102,13 @@
                 card.className = 'album-card';
                 card.onclick = () => window.open(album.url, '_blank');
                 card.innerHTML = `
-                    <img src="${album.image || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
-                         alt="${album.name}" class="album-cover"
-                         onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
-                    <div class="album-info">
-                        <div class="album-name" title="${album.name}">${album.name}</div>
-                        <div class="album-artist" title="${album.artist}">${album.artist}</div>
-                    </div>`;
+    <img src="${album.image_url || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
+         alt="${album.album_name}" class="album-cover"
+         onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
+    <div class="album-info">
+        <div class="album-name" title="${album.album_name}">${album.album_name}</div>
+        <div class="album-artist" title="${album.artist_name}">${album.artist_name}</div>
+    </div>`;
                 grid.appendChild(card);
             });
             sendHeight();
