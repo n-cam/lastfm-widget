@@ -134,7 +134,7 @@ initDatabase().then(() => {
 // In-memory cache for MusicBrainz lookups
 const mbCache = new Map();
 
-// Helper functions (same as before)
+// Helper functions
 function cleanAlbumName(name) {
   return name
     .replace(/\s*\(.*?(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty).*?\)/gi, '')
@@ -379,38 +379,88 @@ app.get('/api/top-albums', async (req, res) => {
 
     try {
       const hasFilter = year || decade || yearStart || yearEnd;
-      const fetchLimit = hasFilter ? 1000 : Math.min(200, limit);
       
-      const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${fetchLimit}`;
+      // For filtered queries, we need to scan more albums to find matches
+      // But we'll do it in smaller chunks to avoid timeouts
+      const maxAlbumsToScan = hasFilter ? 1000 : 200;
+      const perPage = 500; // Last.fm's max per request
+      const pagesToFetch = Math.ceil(maxAlbumsToScan / perPage);
       
-      console.log(`  📡 Fetching ${fetchLimit} albums from Last.fm API...`);
-      const response = await fetch(lastfmUrl);
+      console.log(`  📡 Fetching up to ${maxAlbumsToScan} albums in ${pagesToFetch} page(s)...`);
       
-      if (!response.ok) {
-        console.error(`  ❌ Last.fm API returned ${response.status}`);
-        return res.status(response.status).json({ error: 'Last.fm API error', status: response.status });
-      }
+      let allAlbums = [];
       
-      const data = await response.json();
+      // Fetch albums in pages
+      for (let page = 1; page <= pagesToFetch; page++) {
+        const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
+        
+        console.log(`    Fetching page ${page}/${pagesToFetch}...`);
+        
+        try {
+          const response = await fetch(lastfmUrl);
+          
+          if (!response.ok) {
+            console.error(`  ❌ Last.fm API returned ${response.status} on page ${page}`);
+            // If we got some albums already, continue with what we have
+            if (allAlbums.length > 0) {
+              console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
+              break;
+            }
+            return res.status(response.status).json({ error: 'Last.fm API error', status: response.status });
+          }
+          
+          const data = await response.json();
 
-      if (!data.topalbums || !data.topalbums.album) {
+          if (!data.topalbums || !data.topalbums.album) {
+            console.log(`  ℹ️  No more albums at page ${page}`);
+            break;
+          }
+
+          const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
+          allAlbums.push(...albums);
+          
+          console.log(`    ✓ Got ${albums.length} albums (total: ${allAlbums.length})`);
+          
+          // If we got fewer albums than requested, we've reached the end
+          if (albums.length < perPage) {
+            console.log(`  ℹ️  Reached end of user's library`);
+            break;
+          }
+          
+          // Small delay between pages to be nice to Last.fm's API
+          if (page < pagesToFetch) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+          
+        } catch (fetchError) {
+          console.error(`  ❌ Error fetching page ${page}:`, fetchError.message);
+          // If we have some albums, continue with what we have
+          if (allAlbums.length > 0) {
+            console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
+            break;
+          }
+          throw fetchError;
+        }
+      }
+
+      if (allAlbums.length === 0) {
         return res.status(404).json({ error: 'User not found or no albums' });
       }
 
-      const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-      console.log(`  ✓ Got ${albums.length} albums from Last.fm (scanning for ${limit} matches)`);
+      console.log(`  ✓ Total fetched: ${allAlbums.length} albums from Last.fm`);
+      console.log(`  🔍 Looking up release years for filtered search...`);
 
       const processedAlbums = [];
       
-      console.log(`  🔍 Looking up release years...`);
-      
-      for (let i = 0; i < albums.length; i++) {
-        const a = albums[i];
+      for (let i = 0; i < allAlbums.length; i++) {
+        const a = allAlbums[i];
         
+        // Get MusicBrainz data for release year
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let shouldInclude = true;
         
+        // Apply filters
         if (year && mbData.release_year !== year) {
           shouldInclude = false;
         }
@@ -441,22 +491,26 @@ app.get('/api/top-albums', async (req, res) => {
           });
         }
         
+        // Stop once we have enough matches
         if (processedAlbums.length >= limit) {
+          console.log(`  ✓ Found ${limit} matching albums, stopping search`);
           break;
         }
         
+        // Progress updates every 10 albums
         if ((i + 1) % 10 === 0) {
-          console.log(`    Processed ${i + 1}/${albums.length} albums, found ${processedAlbums.length} matches`);
+          console.log(`    Processed ${i + 1}/${allAlbums.length} albums, found ${processedAlbums.length} matches`);
         }
       }
 
-      console.log(`  ✓ Returning ${processedAlbums.length} albums`);
+      console.log(`  ✅ Returning ${processedAlbums.length} albums`);
 
       return res.json({
         user: username,
         mode: 'realtime',
         filters: { year, decade, yearStart, yearEnd },
         count: processedAlbums.length,
+        scanned: allAlbums.length,
         albums: processedAlbums
       });
 
@@ -511,7 +565,7 @@ app.get('/api/top-albums', async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ 
-        error: 'User not cached. Run /api/update?user=' + username + '&full=true first' 
+        error: 'User not cached. This user uses real-time mode.' 
       });
     }
 
