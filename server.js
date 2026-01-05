@@ -390,56 +390,110 @@ app.get('/api/top-albums', async (req, res) => {
       
       let allAlbums = [];
       
-      // Fetch albums in pages
+      // Fetch albums in pages with retry logic
       for (let page = 1; page <= pagesToFetch; page++) {
         const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
         
         console.log(`    Fetching page ${page}/${pagesToFetch}...`);
         
-        try {
-          const response = await fetch(lastfmUrl);
-          
-          if (!response.ok) {
-            console.error(`  ❌ Last.fm API returned ${response.status} on page ${page}`);
-            // If we got some albums already, continue with what we have
-            if (allAlbums.length > 0) {
-              console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
+        let retryCount = 0;
+        const maxRetries = 3;
+        let pageSuccess = false;
+        
+        while (retryCount < maxRetries && !pageSuccess) {
+          try {
+            const response = await fetch(lastfmUrl, {
+              timeout: 10000 // 10 second timeout
+            });
+            
+            if (!response.ok) {
+              console.error(`  ❌ Last.fm API returned ${response.status} on page ${page}`);
+              
+              // If it's a 503 or 429, retry with exponential backoff
+              if ((response.status === 503 || response.status === 429) && retryCount < maxRetries - 1) {
+                const waitTime = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
+                console.log(`  ⏳ Retrying in ${waitTime/1000}s... (attempt ${retryCount + 2}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                retryCount++;
+                continue;
+              }
+              
+              // If we got some albums already, continue with what we have
+              if (allAlbums.length > 0) {
+                console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
+                pageSuccess = true; // Exit retry loop
+                break;
+              }
+              
+              // Try to get the error message from Last.fm
+              let errorMessage = 'Last.fm API error';
+              try {
+                const errorData = await response.json();
+                if (errorData.message) {
+                  errorMessage = errorData.message;
+                }
+              } catch (e) {
+                // Ignore JSON parse errors
+              }
+              
+              return res.status(response.status).json({ 
+                error: errorMessage, 
+                status: response.status,
+                hint: response.status === 503 ? 'Last.fm API is temporarily unavailable. Please try again in a moment.' : null
+              });
+            }
+            
+            const data = await response.json();
+
+            if (!data.topalbums || !data.topalbums.album) {
+              console.log(`  ℹ️  No more albums at page ${page}`);
+              pageSuccess = true;
               break;
             }
-            return res.status(response.status).json({ error: 'Last.fm API error', status: response.status });
-          }
-          
-          const data = await response.json();
 
-          if (!data.topalbums || !data.topalbums.album) {
-            console.log(`  ℹ️  No more albums at page ${page}`);
-            break;
+            const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
+            allAlbums.push(...albums);
+            
+            console.log(`    ✓ Got ${albums.length} albums (total: ${allAlbums.length})`);
+            
+            pageSuccess = true;
+            
+            // If we got fewer albums than requested, we've reached the end
+            if (albums.length < perPage) {
+              console.log(`  ℹ️  Reached end of user's library`);
+              break;
+            }
+            
+          } catch (fetchError) {
+            console.error(`  ❌ Error fetching page ${page}:`, fetchError.message);
+            
+            // Retry on network errors
+            if (retryCount < maxRetries - 1) {
+              const waitTime = Math.pow(2, retryCount) * 1000;
+              console.log(`  ⏳ Retrying in ${waitTime/1000}s... (attempt ${retryCount + 2}/${maxRetries})`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              retryCount++;
+              continue;
+            }
+            
+            // If we have some albums, continue with what we have
+            if (allAlbums.length > 0) {
+              console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
+              pageSuccess = true;
+              break;
+            }
+            throw fetchError;
           }
-
-          const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-          allAlbums.push(...albums);
-          
-          console.log(`    ✓ Got ${albums.length} albums (total: ${allAlbums.length})`);
-          
-          // If we got fewer albums than requested, we've reached the end
-          if (albums.length < perPage) {
-            console.log(`  ℹ️  Reached end of user's library`);
-            break;
-          }
-          
-          // Small delay between pages to be nice to Last.fm's API
-          if (page < pagesToFetch) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-          
-        } catch (fetchError) {
-          console.error(`  ❌ Error fetching page ${page}:`, fetchError.message);
-          // If we have some albums, continue with what we have
-          if (allAlbums.length > 0) {
-            console.log(`  ⚠️  Continuing with ${allAlbums.length} albums from previous pages`);
-            break;
-          }
-          throw fetchError;
+        }
+        
+        // If page wasn't successful and we have no albums, stop
+        if (!pageSuccess && allAlbums.length === 0) {
+          break;
+        }
+        
+        // Longer delay between pages to be extra nice to Last.fm's API
+        if (page < pagesToFetch && pageSuccess) {
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
 
@@ -516,7 +570,21 @@ app.get('/api/top-albums', async (req, res) => {
 
     } catch (err) {
       console.error('Real-time fetch error:', err);
-      return res.status(500).json({ error: 'Failed to fetch albums', details: err.message });
+      
+      // Check if it's a Last.fm API error
+      if (err.message.includes('User not found')) {
+        return res.status(404).json({ 
+          error: 'Last.fm user not found', 
+          details: 'Please check the username is correct',
+          username: username
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Failed to fetch albums', 
+        details: err.message,
+        hint: 'Last.fm API may be temporarily unavailable. Please try again in a moment.'
+      });
     }
   }
 
