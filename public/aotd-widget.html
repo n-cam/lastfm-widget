@@ -59,7 +59,7 @@
                 if (data.albums && data.albums.length > 0) {
                     // Calculate actual count and format the decade range
                     const actualCount = data.albums.length;
-                    titleEl.textContent = `my top ${actualCount} albums from ${start} to ${end}`;
+                    titleEl.textContent = `My Top ${actualCount} Albums from ${start} to ${end}`;
                     
                     data.albums.forEach(album => {
                         const card = document.createElement('div');
