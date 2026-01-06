@@ -153,27 +153,48 @@ function cleanArtistName(name) {
     .trim();
 }
 
+// ✅ FIXED: Unicode-aware normalization for international characters
 function normalizeForComparison(str) {
-  return str.toLowerCase()
-    .replace(/^(the|a|an)\s+/i, '')
-    .replace(/^(ms\.?|mr\.?|mrs\.?|dr\.?)\s+/i, '')
-    .replace(/[^a-z0-9]/g, '')
-    .trim();
+  try {
+    return str.toLowerCase()
+      .normalize('NFD') // Decompose combined characters (é -> e + ´)
+      .replace(/[\u0300-\u036f]/g, '') // Remove diacritics/accents
+      .replace(/[^\p{L}\p{N}]/gu, '') // Keep only letters & numbers (Unicode-aware)
+      .trim();
+  } catch (e) {
+    // Fallback for older Node.js versions without Unicode property escapes
+    return str.toLowerCase()
+      .replace(/[^a-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/gi, '')
+      .trim();
+  }
 }
 
+// ✅ IMPROVED: Better similarity scoring that handles different character sets
 function stringSimilarity(str1, str2) {
   const s1 = normalizeForComparison(str1);
   const s2 = normalizeForComparison(str2);
   
+  // Exact match
   if (s1 === s2) return 1.0;
-  if (s1.includes(s2) || s2.includes(s1)) return 0.8;
   
+  // Empty strings
+  if (s1.length === 0 || s2.length === 0) return 0.0;
+  
+  // Substring match (high confidence)
+  if (s1.includes(s2) || s2.includes(s1)) return 0.85;
+  
+  // Character overlap (Jaccard similarity)
   const chars1 = new Set(s1);
   const chars2 = new Set(s2);
   const intersection = new Set([...chars1].filter(x => chars2.has(x)));
   const union = new Set([...chars1, ...chars2]);
   
-  return intersection.size / union.size;
+  const jaccard = intersection.size / union.size;
+  
+  // Length similarity bonus
+  const lengthRatio = Math.min(s1.length, s2.length) / Math.max(s1.length, s2.length);
+  
+  return jaccard * 0.7 + lengthRatio * 0.3;
 }
 
 async function getMusicBrainzData(artist, album) {
@@ -187,31 +208,59 @@ async function getMusicBrainzData(artist, album) {
     const cleanedAlbum = cleanAlbumName(album);
     const cleanedArtist = cleanArtistName(artist);
     
-    const query = encodeURIComponent(`release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`);
-    const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=10`;
+    // ✅ IMPROVED: Try multiple query strategies for better international support
+    const queries = [
+      // Strategy 1: Exact match with original names
+      `release:"${album}" AND artist:"${artist}"`,
+      // Strategy 2: Cleaned names
+      `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`,
+      // Strategy 3: Fuzzy search (broader, no quotes)
+      `${cleanedAlbum} ${cleanedArtist}`
+    ];
     
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    let allCandidates = [];
     
-    const response = await fetch(mbUrl, {
-      headers: {
-        'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL} )`
+    for (const queryString of queries) {
+      const query = encodeURIComponent(queryString);
+      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=15`;
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const response = await fetch(mbUrl, {
+        headers: {
+          'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )`
+        }
+      });
+      
+      const data = await response.json();
+      
+      if (data['release-groups'] && data['release-groups'].length > 0) {
+        allCandidates.push(...data['release-groups']);
+        
+        // If we got good results from first query, no need to try others
+        if (data['release-groups'].length >= 3) break;
       }
-    });
+    }
     
-    const data = await response.json();
-    
-    if (data['release-groups'] && data['release-groups'].length > 0) {
-      const candidates = data['release-groups']
+    if (allCandidates.length > 0) {
+      // Remove duplicates by ID
+      const uniqueCandidates = Array.from(
+        new Map(allCandidates.map(rg => [rg.id, rg])).values()
+      );
+      
+      const candidates = uniqueCandidates
         .filter(rg => {
           if (!rg['first-release-date']) return false;
           if (!rg['artist-credit'] || !rg['artist-credit'][0]) return false;
           
           const rgArtist = rg['artist-credit'][0].name;
           const artistSimilarity = stringSimilarity(artist, rgArtist);
-          if (artistSimilarity < 0.5) return false;
+          
+          // ✅ IMPROVED: Lower threshold for better international matching
+          if (artistSimilarity < 0.35) return false;
           
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-          if (titleSimilarity < 0.4) return false;
+          if (titleSimilarity < 0.3) return false;
           
           const primaryType = rg['primary-type'];
           if (primaryType === 'Single') return false;
@@ -227,13 +276,20 @@ async function getMusicBrainzData(artist, album) {
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
           
           let score = 0;
-          score += artistSimilarity * 200;
-          score += titleSimilarity * 150;
-          if (primaryType === 'Album') score += 50;
-          if (year < 2000) score += 30;
-          else if (year < 2010) score += 20;
-          else if (year < 2015) score += 10;
           
+          // ✅ IMPROVED: Better scoring weights
+          score += artistSimilarity * 250;
+          score += titleSimilarity * 200;
+
+          // Format weight
+          if (primaryType === 'Album') score += 50;
+
+          // Earliest Release Prioritization
+          const currentYear = new Date().getFullYear();
+          const ageBonus = Math.max(0, (currentYear - year) * 1.0); 
+          score += ageBonus;
+
+          // Exact Match Kickers
           if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) score += 100;
           if (normalizeForComparison(rgArtist) === normalizeForComparison(artist)) score += 100;
           
@@ -334,16 +390,13 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
-// New dedicated function to handle background processing
 async function performBackgroundUpdate(username, full, limit) {
   const processStart = Date.now();
   console.log(`🚀 BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
 
   try {
-    // 1. Ensure user exists in DB
     await dbRun(`INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`, [username]);
 
-    // 2. We fetch page by page and process immediately to save memory
     const perPage = 50; 
     const pages = Math.ceil(limit / perPage);
     let totalUpdated = 0;
@@ -363,13 +416,10 @@ async function performBackgroundUpdate(username, full, limit) {
 
        const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
        
-       // Process this batch
        for (const a of albums) {
           try {
-            // This is the slow part (MusicBrainz lookup)
             const mbData = await getMusicBrainzData(a.artist.name, a.name);
 
-            // Global Album Insert
             await dbRun(`
               INSERT INTO albums_global (
                 musicbrainz_id, album_name, artist_name, 
@@ -385,7 +435,6 @@ async function performBackgroundUpdate(username, full, limit) {
               a.url, mbData.type
             ]);
 
-            // User Link Insert
             await dbRun(`
               INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
               VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
@@ -405,7 +454,6 @@ async function performBackgroundUpdate(username, full, limit) {
        await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 3. Finalize
     const updateQuery = `
       UPDATE users 
       SET ${full ? 'last_update_full' : 'last_update_recent'} = CURRENT_TIMESTAMP,
@@ -455,7 +503,6 @@ function shouldUseCache(username) {
   return CACHED_USERS.includes(username);
 }
 
-// --- OPTIMIZED UPDATE ROUTE (FIRE AND FORGET) ---
 app.get('/api/update', (req, res) => {
   const username = req.query.user;
   const full = req.query.full === 'true';
@@ -467,7 +514,6 @@ app.get('/api/update', (req, res) => {
     return res.status(403).json({ error: 'Cache updates only for approved users' });
   }
 
-  // 1. Send Success Response IMMEDIATELY
   res.json({
     success: true,
     message: "Update process started in the background. Check back in a few minutes.",
@@ -475,12 +521,9 @@ app.get('/api/update', (req, res) => {
     status: "processing"
   });
 
-  // 2. Start the heavy work (without 'await' so we don't block the response)
   performBackgroundUpdate(username, full, limit);
 });
 
-// --- MAIN DATA ROUTE (REPAIRED) ---
-// This wraps the logic that was previously floating and causing crashes
 app.get('/api/top-albums', async (req, res) => {
   const username = req.query.user;
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
@@ -657,7 +700,6 @@ app.get('/api/top-albums', async (req, res) => {
     return;
   }
   
-  // CACHED MODE
   console.log(`🟢 Mode: CACHED`);
 
   try {
@@ -775,7 +817,6 @@ app.get('/api/cache/stats', async (req, res) => {
   }
 });
 
-// NEW: Get all cached albums (across all users)
 app.get('/api/albums/all', async (req, res) => {
   const year = req.query.year ? parseInt(req.query.year) : null;
   const limit = req.query.limit ? parseInt(req.query.limit) : 100;
@@ -786,11 +827,11 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = $${paramIndex}`;
+      query += ` WHERE release_year = ${paramIndex}`;
       params.push(year);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex + (year ? 1 : 0)}`;
+    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex + (year ? 1 : 0)}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
