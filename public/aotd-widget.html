@@ -1,97 +1,97 @@
-<script>
-    // Wrap everything in an event listener to ensure the HTML is ready
-    document.addEventListener('DOMContentLoaded', () => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const username = urlParams.get('user') || 'nikzx';
-        const limit = urlParams.get('limit') || 24;
-        
-        const year = urlParams.get('year');
-        const startYear = urlParams.get('startYear');
-        const endYear = urlParams.get('endYear');
-        
-        const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Top Albums - Decade</title>
+    <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Martian Mono', monospace; background: transparent; padding: 10px; overflow: hidden; }
+        .widget-title { font-size: 24px; font-weight: 600; color: #4A1DC0; margin-bottom: 20px; text-transform: lowercase; }
+        .loading { text-align: center; padding: 40px; color: #4A1DC0; }
+        .albums-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+        .album-card { background: white; border: 2px solid #4A1DC0; border-radius: 12px; overflow: hidden; box-shadow: 2px 4px 0 #4A1DC0; cursor: pointer; }
+        .album-cover { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #eee; }
+        .album-info { padding: 10px; }
+        .album-name { font-weight: 700; font-size: 11px; color: #4A1DC0; line-height: 1.2; margin-bottom: 4px; }
+        .album-artist { font-size: 10px; color: #4A1DC0; opacity: 0.7; }
+        .error { color: red; text-align: center; padding: 20px; }
+        @media (max-width: 768px) { .albums-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
+    </style>
+</head>
+<body>
 
-        // Elements
-        const loadingEl = document.getElementById('loading');
-        const errorEl = document.getElementById('error');
-        const gridEl = document.getElementById('albumsGrid');
-        const noResultsEl = document.getElementById('noResults');
-        const titleEl = document.getElementById('widgetTitle');
+    <div id="widget-content">
+        <div class="widget-title" id="widgetTitle">top albums</div>
+        
+        <div id="loading" class="loading">loading albums...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="albumsGrid" class="albums-grid"></div>
+        <div id="noResults" style="display: none; text-align: center; color: #4A1DC0;">no albums found for this decade</div>
+    </div>
 
-        async function loadAlbums() {
+    <script>
+        // Use a function to ensure we don't run until the elements exist
+        async function initWidget() {
+            const params = new URLSearchParams(window.location.search);
+            const user = params.get('user') || 'nikzx';
+            const start = params.get('startYear');
+            const end = params.get('endYear');
+            const limit = params.get('limit') || 24;
+
+            const titleEl = document.getElementById('widgetTitle');
+            const gridEl = document.getElementById('albumsGrid');
+            const loadingEl = document.getElementById('loading');
+            const errorEl = document.getElementById('error');
+            const noResultsEl = document.getElementById('noResults');
+
+            // Construct URL matching your server's API: yearStart and yearEnd
+            const apiUrl = `https://lastfm-widget.onrender.com/api/top-albums?user=${user}&yearStart=${start}&yearEnd=${end}&limit=${limit}`;
+
             try {
-                let url = `${API_URL}?user=${username}&limit=${limit}`;
-                
-                if (year) {
-                    url += `&year=${year}`;
-                } else if (startYear && endYear) {
-                    url += `&yearStart=${startYear}&yearEnd=${endYear}`;
-                }
-
-                console.log('Fetching:', url);
-                const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const response = await fetch(apiUrl);
+                if (!response.ok) throw new Error(`Server returned ${response.status}`);
                 
                 const data = await response.json();
-
-                // Hide loading
-                if (loadingEl) loadingEl.style.display = 'none';
+                loadingEl.style.display = 'none';
 
                 if (data.albums && data.albums.length > 0) {
-                    if (titleEl) {
-                        titleEl.textContent = year ? `top albums of ${year}` : `top albums ${startYear}s`;
-                    }
-                    displayAlbums(data.albums);
+                    titleEl.textContent = `top albums ${start}s`;
+                    
+                    data.albums.forEach(album => {
+                        const card = document.createElement('div');
+                        card.className = 'album-card';
+                        card.onclick = () => window.open(album.url, '_blank');
+                        card.innerHTML = `
+                            <img src="${album.image || ''}" class="album-cover" onerror="this.src='https://via.placeholder.com/300'">
+                            <div class="album-info">
+                                <div class="album-name">${album.name}</div>
+                                <div class="album-artist">${album.artist}</div>
+                            </div>
+                        `;
+                        gridEl.appendChild(card);
+                    });
+
+                    // Wait for images to render then tell parent to resize
+                    setTimeout(() => {
+                        const height = document.getElementById('widget-content').offsetHeight + 40;
+                        window.parent.postMessage({ type: 'resize', height: height }, '*');
+                    }, 500);
+
                 } else {
-                    if (noResultsEl) noResultsEl.style.display = 'block';
-                } 
-            } catch (err) {
-                console.error('Widget error:', err);
-                if (loadingEl) loadingEl.style.display = 'none';
-                if (errorEl) {
-                    errorEl.textContent = "failed to load albums";
-                    errorEl.style.display = 'block';
+                    noResultsEl.style.display = 'block';
                 }
+            } catch (err) {
+                console.error(err);
+                loadingEl.style.display = 'none';
+                errorEl.style.display = 'block';
+                errorEl.textContent = "failed to load decade data";
             }
         }
 
-        function displayAlbums(albums) {
-            if (!gridEl) return;
-            gridEl.innerHTML = '';
-            gridEl.style.display = 'grid';
-            
-            albums.forEach((album) => {
-                const card = document.createElement('div');
-                card.className = 'album-card';
-                
-                const albumName = album.name || 'Unknown Album';
-                const artistName = album.artist || 'Unknown Artist';
-                const imageUrl = album.image || '';
-                const albumUrl = album.url || '#';
-                
-                card.onclick = () => { if (albumUrl !== '#') window.open(albumUrl, '_blank'); };
-                
-                card.innerHTML = `
-                    <img src="${imageUrl || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
-                         alt="${albumName}" class="album-cover"
-                         onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
-                    <div class="album-info">
-                        <div class="album-name" title="${albumName}">${albumName}</div>
-                        <div class="album-artist" title="${artistName}">${artistName}</div>
-                    </div>
-                `;
-                gridEl.appendChild(card);
-            });
-            
-            setTimeout(sendHeight, 200);
-        }
-
-        function sendHeight() {
-            const height = document.body.scrollHeight || document.body.offsetHeight;
-            window.parent.postMessage({ type: 'resize', height: height }, '*');
-        }
-
-        loadAlbums();
-        window.addEventListener('resize', sendHeight);
-    });
-</script>
+        // Run the script
+        initWidget();
+    </script>
+</body>
+</html>
