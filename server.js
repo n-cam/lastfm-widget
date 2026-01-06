@@ -334,6 +334,94 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
+// New dedicated function to handle background processing
+async function performBackgroundUpdate(username, full, limit) {
+  const processStart = Date.now();
+  console.log(`🚀 BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
+
+  try {
+    // 1. Ensure user exists in DB
+    await dbRun(`INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`, [username]);
+
+    // 2. We fetch page by page and process immediately to save memory
+    const perPage = 50; 
+    const pages = Math.ceil(limit / perPage);
+    let totalUpdated = 0;
+
+    for (let page = 1; page <= pages; page++) {
+       console.log(`\n📄 BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
+       
+       const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
+       
+       const response = await fetch(lastfmUrl);
+       const data = await response.json();
+
+       if (!data.topalbums || !data.topalbums.album) { 
+           console.log("  ⚠️ No more albums found."); 
+           break; 
+       }
+
+       const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
+       
+       // Process this batch
+       for (const a of albums) {
+          try {
+            // This is the slow part (MusicBrainz lookup)
+            const mbData = await getMusicBrainzData(a.artist.name, a.name);
+
+            // Global Album Insert
+            await dbRun(`
+              INSERT INTO albums_global (
+                musicbrainz_id, album_name, artist_name, 
+                canonical_album, canonical_artist, release_year,
+                image_url, lastfm_url, album_type, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+              ON CONFLICT(musicbrainz_id) 
+              DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            `, [
+              mbData.musicbrainz_id, a.name, a.artist.name, mbData.canonical_name, 
+              mbData.canonical_artist, mbData.release_year, 
+              a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+              a.url, mbData.type
+            ]);
+
+            // User Link Insert
+            await dbRun(`
+              INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
+              VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+              ON CONFLICT(username, musicbrainz_id) 
+              DO UPDATE SET playcount = EXCLUDED.playcount, updated_at = CURRENT_TIMESTAMP
+            `, [username, mbData.musicbrainz_id, parseInt(a.playcount)]);
+            
+            totalUpdated++;
+            
+            if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums`);
+
+          } catch (innerErr) {
+             console.error(`  ⚠️ Skipped album: ${a.name}`);
+          }
+       }
+       
+       await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // 3. Finalize
+    const updateQuery = `
+      UPDATE users 
+      SET ${full ? 'last_update_full' : 'last_update_recent'} = CURRENT_TIMESTAMP,
+          total_albums = (SELECT COUNT(*) FROM user_albums WHERE username = $1)
+      WHERE username = $1
+    `;
+    await dbRun(updateQuery, [username]);
+    
+    const duration = ((Date.now() - processStart) / 1000).toFixed(1);
+    console.log(`✅ BACKGROUND: Finished ${username}. Updated ${totalUpdated} albums in ${duration}s`);
+
+  } catch (err) {
+    console.error(`❌ BACKGROUND ERROR for ${username}:`, err);
+  }
+}
+
 app.use(express.static('public'));
 
 app.use((req, res, next) => {
@@ -367,6 +455,32 @@ function shouldUseCache(username) {
   return CACHED_USERS.includes(username);
 }
 
+// --- OPTIMIZED UPDATE ROUTE (FIRE AND FORGET) ---
+app.get('/api/update', (req, res) => {
+  const username = req.query.user;
+  const full = req.query.full === 'true';
+  const limit = full ? parseInt(req.query.limit || 1000) : 200;
+
+  if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
+
+  if (!shouldUseCache(username)) {
+    return res.status(403).json({ error: 'Cache updates only for approved users' });
+  }
+
+  // 1. Send Success Response IMMEDIATELY
+  res.json({
+    success: true,
+    message: "Update process started in the background. Check back in a few minutes.",
+    username: username,
+    status: "processing"
+  });
+
+  // 2. Start the heavy work (without 'await' so we don't block the response)
+  performBackgroundUpdate(username, full, limit);
+});
+
+// --- MAIN DATA ROUTE (REPAIRED) ---
+// This wraps the logic that was previously floating and causing crashes
 app.get('/api/top-albums', async (req, res) => {
   const username = req.query.user;
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
@@ -623,103 +737,6 @@ app.get('/api/top-albums', async (req, res) => {
     console.error('❌ Query failed:', err);
     console.log('='.repeat(60) + '\n');
     res.status(500).json({ error: 'Query failed' });
-  }
-});
-
-app.get('/api/update', async (req, res) => {
-  const username = req.query.user;
-  const full = req.query.full === 'true';
-  const limit = full ? parseInt(req.query.limit || 5000) : 200;
-
-  if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
-
-  if (!shouldUseCache(username)) {
-    return res.status(403).json({ error: 'Cache updates only for approved users' });
-  }
-
-  console.log(`\n🔄 ${full ? 'FULL' : 'QUICK'} UPDATE for ${username}`);
-
-  try {
-    await dbRun(`INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`, [username]);
-
-    const albums = await fetchAllAlbums(username, limit);
-
-    if (albums.length === 0) {
-      return res.status(404).json({ error: "No albums found" });
-    }
-
-    console.log(`✅ Fetched ${albums.length} albums from Last.fm`);
-
-    let updated = 0;
-
-    for (const a of albums) {
-      try {
-        const mbData = await getMusicBrainzData(a.artist.name, a.name);
-        
-        // Insert/update global album
-        const globalQuery = `
-          INSERT INTO albums_global (
-            musicbrainz_id, album_name, artist_name, 
-            canonical_album, canonical_artist, release_year,
-            image_url, lastfm_url, album_type, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-          ON CONFLICT(musicbrainz_id) 
-          DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-        `;
-        
-        await dbRun(globalQuery, [
-          mbData.musicbrainz_id,
-          a.name,
-          a.artist.name,
-          mbData.canonical_name,
-          mbData.canonical_artist,
-          mbData.release_year,
-          a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-          a.url,
-          mbData.type
-        ]);
-        
-        // Insert/update user's playcount
-        const userQuery = `
-          INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
-          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-          ON CONFLICT(username, musicbrainz_id) 
-          DO UPDATE SET 
-            playcount = EXCLUDED.playcount,
-            updated_at = CURRENT_TIMESTAMP
-        `;
-        
-        await dbRun(userQuery, [
-          username,
-          mbData.musicbrainz_id,
-          parseInt(a.playcount)
-        ]);
-        
-        updated++;
-      } catch (err) {
-        console.error(`Error processing album:`, err.message);
-      }
-    }
-
-    const updateQuery = `
-      UPDATE users 
-      SET ${full ? 'last_update_full' : 'last_update_recent'} = CURRENT_TIMESTAMP,
-          total_albums = (SELECT COUNT(*) FROM user_albums WHERE username = $1)
-      WHERE username = $1
-    `;
-    await dbRun(updateQuery, [username]);
-
-    console.log(`✅ Update complete: ${updated} albums\n`);
-
-    res.json({
-      success: true,
-      username,
-      albums_updated: updated
-    });
-
-  } catch (err) {
-    console.error('Update error:', err);
-    res.status(500).json({ error: 'Update failed', details: err.message });
   }
 });
 
