@@ -1,93 +1,97 @@
 <script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const username = urlParams.get('user') || 'nikzx';
-    const limit = urlParams.get('limit') || 24;
-    
-    // Support both single year or a range
-    const year = urlParams.get('year');
-    const startYear = urlParams.get('startYear');
-    const endYear = urlParams.get('endYear');
-    
-    const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
+    // Wrap everything in an event listener to ensure the HTML is ready
+    document.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const username = urlParams.get('user') || 'nikzx';
+        const limit = urlParams.get('limit') || 24;
+        
+        const year = urlParams.get('year');
+        const startYear = urlParams.get('startYear');
+        const endYear = urlParams.get('endYear');
+        
+        const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
 
-    async function loadAlbums() {
-        try {
-            // Build the URL based on which params were provided
-            let url = `${API_URL}?user=${username}&limit=${limit}`;
-            
-            if (year) {
-                url += `&year=${year}`;
-            } else if (startYear && endYear) {
-                url += `&yearStart=${startYear}&yearEnd=${endYear}`;
-            }
+        // Elements
+        const loadingEl = document.getElementById('loading');
+        const errorEl = document.getElementById('error');
+        const gridEl = document.getElementById('albumsGrid');
+        const noResultsEl = document.getElementById('noResults');
+        const titleEl = document.getElementById('widgetTitle');
 
-            console.log('Fetching:', url);
-            const response = await fetch(url);
-            
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            
-            const data = await response.json();
-            document.getElementById('loading').style.display = 'none';
-
-            if (data.albums && data.albums.length > 0) {
-                // Set the title dynamically
-                let titleText = `top albums`;
-                if (year) titleText = `top albums of ${year}`;
-                else if (startYear) titleText = `top albums ${startYear}s`;
+        async function loadAlbums() {
+            try {
+                let url = `${API_URL}?user=${username}&limit=${limit}`;
                 
-                document.getElementById('widgetTitle').textContent = titleText;
-                displayAlbums(data.albums);
-            } else {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('noResults').style.display = 'block';
-            } 
-        } catch (err) {
-            console.error('Widget error:', err);
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('error').textContent = "failed to load albums";
-            document.getElementById('error').style.display = 'block';
+                if (year) {
+                    url += `&year=${year}`;
+                } else if (startYear && endYear) {
+                    url += `&yearStart=${startYear}&yearEnd=${endYear}`;
+                }
+
+                console.log('Fetching:', url);
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const data = await response.json();
+
+                // Hide loading
+                if (loadingEl) loadingEl.style.display = 'none';
+
+                if (data.albums && data.albums.length > 0) {
+                    if (titleEl) {
+                        titleEl.textContent = year ? `top albums of ${year}` : `top albums ${startYear}s`;
+                    }
+                    displayAlbums(data.albums);
+                } else {
+                    if (noResultsEl) noResultsEl.style.display = 'block';
+                } 
+            } catch (err) {
+                console.error('Widget error:', err);
+                if (loadingEl) loadingEl.style.display = 'none';
+                if (errorEl) {
+                    errorEl.textContent = "failed to load albums";
+                    errorEl.style.display = 'block';
+                }
+            }
         }
-    }
 
-    function displayAlbums(albums) {
-        const grid = document.getElementById('albumsGrid');
-        grid.innerHTML = '';
-        grid.style.display = 'grid';
-        
-        albums.forEach((album) => {
-            const card = document.createElement('div');
-            card.className = 'album-card';
+        function displayAlbums(albums) {
+            if (!gridEl) return;
+            gridEl.innerHTML = '';
+            gridEl.style.display = 'grid';
             
-            const albumName = album.name || 'Unknown Album';
-            const artistName = album.artist || 'Unknown Artist';
-            const imageUrl = album.image || '';
-            const albumUrl = album.url || '#';
+            albums.forEach((album) => {
+                const card = document.createElement('div');
+                card.className = 'album-card';
+                
+                const albumName = album.name || 'Unknown Album';
+                const artistName = album.artist || 'Unknown Artist';
+                const imageUrl = album.image || '';
+                const albumUrl = album.url || '#';
+                
+                card.onclick = () => { if (albumUrl !== '#') window.open(albumUrl, '_blank'); };
+                
+                card.innerHTML = `
+                    <img src="${imageUrl || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
+                         alt="${albumName}" class="album-cover"
+                         onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
+                    <div class="album-info">
+                        <div class="album-name" title="${albumName}">${albumName}</div>
+                        <div class="album-artist" title="${artistName}">${artistName}</div>
+                    </div>
+                `;
+                gridEl.appendChild(card);
+            });
             
-            card.onclick = () => { if (albumUrl !== '#') window.open(albumUrl, '_blank'); };
-            
-            card.innerHTML = `
-                <img src="${imageUrl || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
-                     alt="${albumName}" class="album-cover"
-                     onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
-                <div class="album-info">
-                    <div class="album-name" title="${albumName}">${albumName}</div>
-                    <div class="album-artist" title="${artistName}">${artistName}</div>
-                </div>
-            `;
-            grid.appendChild(card);
-        });
-        
-        // Wait a tiny bit for images to start rendering then resize
-        setTimeout(sendHeight, 100);
-    }
+            setTimeout(sendHeight, 200);
+        }
 
-    function sendHeight() {
-        const height = document.body.offsetHeight;
-        window.parent.postMessage({ type: 'resize', height: height }, '*');
-    }
+        function sendHeight() {
+            const height = document.body.scrollHeight || document.body.offsetHeight;
+            window.parent.postMessage({ type: 'resize', height: height }, '*');
+        }
 
-    loadAlbums();
-    // Re-check height when images load
-    window.addEventListener('load', sendHeight);
-    window.addEventListener('resize', sendHeight);
+        loadAlbums();
+        window.addEventListener('resize', sendHeight);
+    });
 </script>
