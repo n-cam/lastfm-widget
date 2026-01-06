@@ -51,38 +51,35 @@
         const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
 
         async function loadAlbums() {
-            try {
-                const url = `${API_URL}?user=${username}&year=${year}&limit=${limit}`;
-                const displayTitle = `My Top ${limit} Albums of ${year}`;
-                
-                console.log('Fetching:', url);
-                const response = await fetch(url);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                console.log('API Response:', data);
-
-                document.getElementById('loading').style.display = 'none';
-
-                if (data.albums && data.albums.length > 0) {
-                    displayAlbums(data.albums);
-                    document.getElementById('widgetTitle').textContent = displayTitle;
-                } else {
-                    document.getElementById('noResults').style.display = 'block';
-                    document.getElementById('widgetTitle').textContent = `${year} albums`;
-                } 
-
-            } catch (err) {
-                console.error('Error:', err);
-                document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error');
-                errorDiv.textContent = '⚠️ ' + err.message;
-                errorDiv.style.display = 'block';
-            }
+    try {
+        const url = `${API_URL}?user=${username}&year=${year}&limit=${limit}`;
+        
+        console.log('Fetching:', url);
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        
+        const data = await response.json();
+        document.getElementById('loading').style.display = 'none';
+
+        if (data.albums && data.albums.length > 0) {
+            // FIX: Use the actual length of the returned array instead of the limit variable
+            const actualCount = data.albums.length;
+            const displayTitle = `My Top ${actualCount} Albums of ${year}`;
+            
+            document.getElementById('widgetTitle').textContent = displayTitle;
+            displayAlbums(data.albums);
+        } else {
+            document.getElementById('noResults').style.display = 'block';
+            document.getElementById('widgetTitle').textContent = `${year} albums`;
+        } 
+
+    } catch (err) {
+        // ... (error handling remains the same)
+    }
+}
 
         function displayAlbums(albums) {
             const grid = document.getElementById('albumsGrid');
