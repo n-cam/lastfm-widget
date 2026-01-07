@@ -821,22 +821,26 @@
                 card.className = 'album-card';
                 card.onclick = () => window.open(album.url, '_blank');
 
-                card.innerHTML = `
-                    <img 
-                        src="${album.image || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
-                        alt="${album.name}"
-                        class="album-cover"
-                        onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'"
-                    >
-                    <div class="album-info">
-                        <div class="album-name" title="${album.name}">${album.name}</div>
-                        <div class="album-artist" title="${album.artist}">${album.artist}</div>
-                        <div class="album-meta">
-                            <span class="album-rank">#${index + 1}</span>
-                            <span class="album-playcount">${album.playcount.toLocaleString()} plays</span>
-                            <span class="album-year">${album.release_year || '?'}</span>
-                        </div>
-                    </div>
+                const imageUrl = (album.image && album.image.trim()) || 
+                 (album.image_url && album.image_url.trim()) || 
+                 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+
+card.innerHTML = `
+    <img 
+        src="${imageUrl}" 
+        alt="${album.name}"
+        class="album-cover"
+        onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+    >
+    <div class="album-info">
+        <div class="album-name" title="${album.name}">${album.name}</div>
+        <div class="album-artist" title="${album.artist}">${album.artist}</div>
+        <div class="album-meta">
+            <span class="album-rank">#${index + 1}</span>
+            <span class="album-playcount">${album.playcount.toLocaleString()} plays</span>
+            <span class="album-year">${album.release_year || '?'}</span>
+        </div>
+    </div>
                 `;
 
                 grid.appendChild(card);
