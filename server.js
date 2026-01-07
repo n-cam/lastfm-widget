@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = require('node-fetch');
+const rateLimit = require('express-rate-limit'); // 1. Added Rate Limit Import
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -131,9 +132,19 @@ async function dbRun(query, params = []) {
   }
 }
 
-initDatabase().then(() => {
+// 10. Updated DB Initialization with Stats Logging
+initDatabase().then(async () => {
   console.log('✅ Database initialized');
   console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
+
+  if (dbType === 'postgres') {
+    try {
+      const count = await dbGet('SELECT COUNT(*) as count FROM albums_global');
+      console.log(`📊 Total albums in global cache: ${count.count}`);
+    } catch (e) {
+      console.log('Could not fetch initial stats');
+    }
+  }
 });
 
 const mbCache = new Map();
@@ -142,20 +153,23 @@ const cron = require('node-cron');
 
 // Run every Sunday at 3am (when traffic is low)
 cron.schedule('0 3 * * 0', async () => {
-  console.log('🔄 Running weekly auto-update for cached users...');
+  console.log('🔄 Starting weekly auto-update...');
   
   for (const user of CACHED_USERS) {
     try {
       console.log(`  Updating ${user}...`);
-      await performBackgroundUpdate(user, false, 500); // Quick update: 500 albums
-      await new Promise(r => setTimeout(r, 60000)); // 1 min between users
+      await performBackgroundUpdate(user, false, 500);
+      await new Promise(r => setTimeout(r, 60000));
     } catch (err) {
-      console.error(`  Failed to update ${user}:`, err);
+      console.error(`  ❌ Failed to update ${user}:`, err);
+      // Continue with next user instead of crashing
     }
   }
   
   console.log('✅ Weekly auto-update complete');
 });
+
+console.log('⏰ Cron job scheduled: Weekly updates every Sunday at 3am');
 
 function cleanAlbumName(name) {
   return name
@@ -172,7 +186,6 @@ function cleanArtistName(name) {
     .trim();
 }
 
-// ✅ FIXED: Unicode-aware normalization for international characters
 function normalizeForComparison(str) {
   try {
     return str.toLowerCase()
@@ -188,7 +201,6 @@ function normalizeForComparison(str) {
   }
 }
 
-// ✅ IMPROVED: Better similarity scoring that handles different character sets
 function stringSimilarity(str1, str2) {
   const s1 = normalizeForComparison(str1);
   const s2 = normalizeForComparison(str2);
@@ -227,13 +239,9 @@ async function getMusicBrainzData(artist, album) {
     const cleanedAlbum = cleanAlbumName(album);
     const cleanedArtist = cleanArtistName(artist);
     
-    // ✅ IMPROVED: Try multiple query strategies for better international support
     const queries = [
-      // Strategy 1: Exact match with original names
       `release:"${album}" AND artist:"${artist}"`,
-      // Strategy 2: Cleaned names
       `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`,
-      // Strategy 3: Fuzzy search (broader, no quotes)
       `${cleanedAlbum} ${cleanedArtist}`
     ];
     
@@ -255,14 +263,11 @@ async function getMusicBrainzData(artist, album) {
       
       if (data['release-groups'] && data['release-groups'].length > 0) {
         allCandidates.push(...data['release-groups']);
-        
-        // If we got good results from first query, no need to try others
         if (data['release-groups'].length >= 3) break;
       }
     }
     
     if (allCandidates.length > 0) {
-      // Remove duplicates by ID
       const uniqueCandidates = Array.from(
         new Map(allCandidates.map(rg => [rg.id, rg])).values()
       );
@@ -275,7 +280,6 @@ async function getMusicBrainzData(artist, album) {
           const rgArtist = rg['artist-credit'][0].name;
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           
-          // ✅ IMPROVED: Lower threshold for better international matching
           if (artistSimilarity < 0.35) return false;
           
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
@@ -295,20 +299,15 @@ async function getMusicBrainzData(artist, album) {
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
           
           let score = 0;
-          
-          // ✅ IMPROVED: Better scoring weights
           score += artistSimilarity * 250;
           score += titleSimilarity * 200;
 
-          // Format weight
           if (primaryType === 'Album') score += 50;
 
-          // Earliest Release Prioritization
           const currentYear = new Date().getFullYear();
           const ageBonus = Math.max(0, (currentYear - year) * 1.0); 
           score += ageBonus;
 
-          // Exact Match Kickers
           if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) score += 100;
           if (normalizeForComparison(rgArtist) === normalizeForComparison(artist)) score += 100;
           
@@ -514,6 +513,22 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// Protection: Define Rate Limiter
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // 50 requests per 15 min per IP
+  message: { error: 'Too many requests, please try again later' }
+});
+
+// 9. Health Check Endpoint
+app.get('/health', (req, res) => {
+  res.json({
+     status: 'ok',
+     timestamp: new Date().toISOString(),
+     uptime: process.uptime()
+  });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/public/index.html');
 });
@@ -543,7 +558,13 @@ app.get('/api/update', (req, res) => {
   performBackgroundUpdate(username, full, limit);
 });
 
+// Apply Rate Limiter specifically to top-albums
+app.use('/api/top-albums', apiLimiter);
+
 app.get('/api/top-albums', async (req, res) => {
+  // 7. Request Timing Start
+  const requestStart = Date.now();
+
   const username = req.query.user;
   if (!username) return res.status(400).json({ error: "Missing 'user' query param" });
 
@@ -702,6 +723,10 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  ✅ Returning ${processedAlbums.length} albums`);
       console.log('='.repeat(60) + '\n');
 
+      // 7. Request Timing End (Realtime)
+      const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
+      console.log(`  ⏱️  Request completed in ${duration}s`);
+
       return res.json({
         user: username,
         mode: 'realtime',
@@ -743,16 +768,19 @@ app.get('/api/top-albums', async (req, res) => {
 
     if (year) {
       query += ` AND ag.release_year = $${paramIndex}`;
+      query += ` AND ag.release_year IS NOT NULL`;
       params.push(year);
       paramIndex++;
     } else if (decade) {
       const decadeStart = decade;
       const decadeEnd = decade + 9;
       query += ` AND ag.release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+      query += ` AND ag.release_year IS NOT NULL`;
       params.push(decadeStart, decadeEnd);
       paramIndex += 2;
     } else if (yearStart && yearEnd) {
       query += ` AND ag.release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+      query += ` AND ag.release_year IS NOT NULL`;
       params.push(yearStart, yearEnd);
       paramIndex += 2;
     }
@@ -777,6 +805,10 @@ app.get('/api/top-albums', async (req, res) => {
 
     console.log(`  ✅ Returning ${albums.length} albums from cache`);
     console.log('='.repeat(60) + '\n');
+
+    // 7. Request Timing End (Cached)
+    const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
+    console.log(`  ⏱️  Request completed in ${duration}s`);
 
     res.json({
       user: username,
@@ -846,11 +878,11 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = ${paramIndex}`;
+      query += ` WHERE release_year = $${paramIndex}`;
       params.push(year);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex + (year ? 1 : 0)}`;
+    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex + (year ? 1 : 0)}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
