@@ -345,6 +345,8 @@
             transition: all 0.2s;
             box-shadow: 4px 4px 0 var(--primary);
             position: relative;
+            display: flex;
+            flex-direction: column;
         }
 
         .album-card:hover {
@@ -372,6 +374,10 @@
 
         .album-info {
             padding: 12px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1; 
+            justify-content: space-between; 
         }
 
         .album-name {
@@ -628,8 +634,7 @@
         </div>
 
         <div class="footer">
-            data provided by <a href="https://www.last.fm" target="_blank" rel="noopener">Last.fm</a> • 
-            not affiliated with Last.fm
+            data provided by <a href="https://www.last.fm" target="_blank" rel="noopener">Last.fm</a>
         </div>
     </div>
 
