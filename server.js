@@ -1,9 +1,38 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = require('node-fetch');
-const rateLimit = require('express-rate-limit'); // 1. Added Rate Limit Import
+const rateLimit = require('express-rate-limit'); // Rate Limit Import
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ==========================================
+// 🚀 SHORT-TERM REQUEST CACHE (New Feature)
+// ==========================================
+const queryCache = new Map(); // Stores final API responses
+
+function getQueryCache(key) {
+  const entry = queryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) {
+    queryCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setQueryCache(key, data, ttlMs = 600000) { // Default 10 minutes
+  // Safety: Prevent memory leaks by limiting cache size
+  if (queryCache.size > 1000) {
+    const firstKey = queryCache.keys().next().value;
+    queryCache.delete(firstKey);
+  }
+  
+  queryCache.set(key, {
+    data,
+    expires: Date.now() + ttlMs
+  });
+}
+// ==========================================
 
 // Database setup
 let db;
@@ -132,7 +161,7 @@ async function dbRun(query, params = []) {
   }
 }
 
-// 10. Updated DB Initialization with Stats Logging
+// Updated DB Initialization with Stats Logging
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
   console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
@@ -520,7 +549,7 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' }
 });
 
-// 9. Health Check Endpoint
+// Health Check Endpoint
 app.get('/health', (req, res) => {
   res.json({
      status: 'ok',
@@ -562,7 +591,7 @@ app.get('/api/update', (req, res) => {
 app.use('/api/top-albums', apiLimiter);
 
 app.get('/api/top-albums', async (req, res) => {
-  // 7. Request Timing Start
+  // Request Timing Start
   const requestStart = Date.now();
 
   const username = req.query.user;
@@ -574,6 +603,19 @@ app.get('/api/top-albums', async (req, res) => {
   const yearEnd = req.query.yearEnd ? parseInt(req.query.yearEnd) : null;
   const artist = req.query.artist ? req.query.artist.toLowerCase() : null;
   const limit = req.query.limit ? parseInt(req.query.limit) : 50;
+
+  // ==========================================
+  // ⚡ SHORT-TERM CACHE CHECK
+  // ==========================================
+  // Create a unique key for this exact request
+  const cacheKey = `req:${username}|y:${year}|d:${decade}|r:${yearStart}-${yearEnd}|a:${artist}|l:${limit}`;
+  const cachedResult = getQueryCache(cacheKey);
+
+  if (cachedResult) {
+    console.log(`⚡ Serving from short-term cache: ${cacheKey}`);
+    return res.json(cachedResult);
+  }
+  // ==========================================
 
   console.log('\n' + '='.repeat(60));
   console.log(formatQueryLog(username, { year, decade, yearStart, yearEnd, limit, artist }));
@@ -723,18 +765,23 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  ✅ Returning ${processedAlbums.length} albums`);
       console.log('='.repeat(60) + '\n');
 
-      // 7. Request Timing End (Realtime)
+      // Request Timing End (Realtime)
       const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
       console.log(`  ⏱️  Request completed in ${duration}s`);
 
-      return res.json({
+      const responseData = {
         user: username,
         mode: 'realtime',
         filters: { year, decade, yearStart, yearEnd },
         count: processedAlbums.length,
         scanned: allAlbums.length,
         albums: processedAlbums
-      });
+      };
+
+      // ⚡ Save to Short-Term Cache
+      setQueryCache(cacheKey, responseData);
+
+      return res.json(responseData);
 
     } catch (err) {
       console.error('❌ Real-time error:', err);
@@ -806,11 +853,11 @@ app.get('/api/top-albums', async (req, res) => {
     console.log(`  ✅ Returning ${albums.length} albums from cache`);
     console.log('='.repeat(60) + '\n');
 
-    // 7. Request Timing End (Cached)
+    // Request Timing End (Cached)
     const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
     console.log(`  ⏱️  Request completed in ${duration}s`);
 
-    res.json({
+    const responseData = {
       user: username,
       mode: 'cached',
       filters: { year, decade, yearStart, yearEnd, artist },
@@ -825,7 +872,12 @@ app.get('/api/top-albums', async (req, res) => {
         musicbrainz_id: a.musicbrainz_id,
         type: a.album_type
       }))
-    });
+    };
+
+    // ⚡ Save to Short-Term Cache
+    setQueryCache(cacheKey, responseData);
+
+    res.json(responseData);
   } catch (err) {
     console.error('❌ Query failed:', err);
     console.log('='.repeat(60) + '\n');
@@ -905,3 +957,5 @@ app.listen(PORT, () => {
   console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
   console.log(`🔴 Public users: real-time mode\n`);
 });
+
+
