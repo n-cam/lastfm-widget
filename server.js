@@ -138,6 +138,25 @@ initDatabase().then(() => {
 
 const mbCache = new Map();
 
+const cron = require('node-cron');
+
+// Run every Sunday at 3am (when traffic is low)
+cron.schedule('0 3 * * 0', async () => {
+  console.log('🔄 Running weekly auto-update for cached users...');
+  
+  for (const user of CACHED_USERS) {
+    try {
+      console.log(`  Updating ${user}...`);
+      await performBackgroundUpdate(user, false, 500); // Quick update: 500 albums
+      await new Promise(r => setTimeout(r, 60000)); // 1 min between users
+    } catch (err) {
+      console.error(`  Failed to update ${user}:`, err);
+    }
+  }
+  
+  console.log('✅ Weekly auto-update complete');
+});
+
 function cleanAlbumName(name) {
   return name
     .replace(/\s*\(.*?(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty).*?\)/gi, '')
