@@ -4,6 +4,7 @@ const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit'); // Rate Limit Import
 const app = express();
 const PORT = process.env.PORT || 3000;
+const AbortController = require('abort-controller');
 
 // ==========================================
 // 🚀 SHORT-TERM REQUEST CACHE (New Feature)
@@ -320,32 +321,67 @@ async function getMusicBrainzData(artist, album) {
           return true;
         })
         .map(rg => {
-          const year = parseInt(rg['first-release-date'].split('-')[0]);
-          const primaryType = rg['primary-type'];
-          const rgArtist = rg['artist-credit'][0].name;
-          
-          const artistSimilarity = stringSimilarity(artist, rgArtist);
-          const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-          
-          let score = 0;
-          score += artistSimilarity * 250;
-          score += titleSimilarity * 200;
+  const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
+  const primaryType = rg['primary-type']?.toLowerCase() || null;
+  const rgArtist = rg['artist-credit']?.[0]?.name || "";
 
-          if (primaryType === 'Album') score += 50;
+  const artistSimilarity = stringSimilarity(artist, rgArtist);
+  const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
 
-          const currentYear = new Date().getFullYear();
-          const ageBonus = Math.max(0, (currentYear - year) * 1.0); 
-          score += ageBonus;
+  let score = 0;
 
-          if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) score += 100;
-          if (normalizeForComparison(rgArtist) === normalizeForComparison(artist)) score += 100;
-          
-          return { ...rg, score, year, artistSimilarity, titleSimilarity, rgArtist };
-        })
-        .sort((a, b) => {
-          if (Math.abs(b.score - a.score) > 10) return b.score - a.score;
-          return a.year - b.year;
-        });
+  // Core evidence (dominates the decision)
+  score += artistSimilarity * 250;
+  score += titleSimilarity * 200;
+
+  // Prefer full albums
+  if (primaryType === 'album') score += 150;
+  else if (primaryType === 'ep') score += 50;
+
+  // Penalize non-studio editions (deluxe, live, compilation, etc.)
+  const badSecondaryTypes = ['compilation', 'live', 'soundtrack'];
+  if (
+    rg['secondary-types']?.some(t =>
+      badSecondaryTypes.includes(t.toLowerCase())
+    )
+  ) {
+    score -= 80;
+  }
+
+  // Exact-match boosts (safe and intentional)
+  if (
+    normalizeForComparison(rg.title) ===
+    normalizeForComparison(cleanedAlbum)
+  ) {
+    score += 100;
+  }
+
+  if (
+    normalizeForComparison(rgArtist) ===
+    normalizeForComparison(artist)
+  ) {
+    score += 100;
+  }
+
+  return {
+    ...rg,
+    score,
+    year,
+    artistSimilarity,
+    titleSimilarity,
+    rgArtist
+  };
+})
+.sort((a, b) => {
+  // 1. Correctness first
+  if (Math.abs(b.score - a.score) > 10) {
+    return b.score - a.score;
+  }
+
+  // 2. Among equally correct matches, earliest release wins
+  return a.year - b.year;
+});
+
       
       if (candidates.length > 0) {
         const best = candidates[0];
@@ -394,7 +430,7 @@ async function fetchAllAlbums(username, totalLimit) {
 
   for (let page = 1; page <= pages; page++) {
     const limit = Math.min(perPage, totalLimit - allAlbums.length);
-    const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${limit}&page=${page}`;
+    const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${limit}&page=${page}`;
     
     console.log(`  Page ${page}/${pages}: Fetching ${limit} albums...`);
     
@@ -442,63 +478,108 @@ async function performBackgroundUpdate(username, full, limit) {
   console.log(`🚀 BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
 
   try {
-    await dbRun(`INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`, [username]);
+    await dbRun(
+      `INSERT INTO users (username) VALUES ($1) ON CONFLICT (username) DO NOTHING`,
+      [username]
+    );
 
     const perPage = 50; 
     const pages = Math.ceil(limit / perPage);
     let totalUpdated = 0;
 
     for (let page = 1; page <= pages; page++) {
-       console.log(`\n📄 BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
-       
-       const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
-       
-       const response = await fetch(lastfmUrl);
-       const data = await response.json();
+      console.log(`\n📄 BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
+      const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
+      
+      let pageData;
+      let retries = 0;
+      const maxRetries = 3;
 
-       if (!data.topalbums || !data.topalbums.album) { 
-           console.log("  ⚠️ No more albums found."); 
-           break; 
-       }
+      while (retries < maxRetries) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        try {
+          const response = await fetch(lastfmUrl, { signal: controller.signal });
 
-       const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-       
-       for (const a of albums) {
-          try {
-            const mbData = await getMusicBrainzData(a.artist.name, a.name);
+          clearTimeout(timeout);
 
-            await dbRun(`
-              INSERT INTO albums_global (
-                musicbrainz_id, album_name, artist_name, 
-                canonical_album, canonical_artist, release_year,
-                image_url, lastfm_url, album_type, updated_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-              ON CONFLICT(musicbrainz_id) 
-              DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-            `, [
-              mbData.musicbrainz_id, a.name, a.artist.name, mbData.canonical_name, 
-              mbData.canonical_artist, mbData.release_year, 
-              a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-              a.url, mbData.type
-            ]);
-
-            await dbRun(`
-              INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
-              VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-              ON CONFLICT(username, musicbrainz_id) 
-              DO UPDATE SET playcount = EXCLUDED.playcount, updated_at = CURRENT_TIMESTAMP
-            `, [username, mbData.musicbrainz_id, parseInt(a.playcount)]);
-            
-            totalUpdated++;
-            
-            if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums`);
-
-          } catch (innerErr) {
-             console.error(`  ⚠️ Skipped album: ${a.name}`);
+          if (!response.ok) {
+            if ((response.status === 429 || response.status === 503) && retries < maxRetries - 1) {
+              const waitTime = Math.pow(2, retries) * 1000;
+              console.log(`  ⏳ Retry #${retries + 1} in ${waitTime/1000}s due to ${response.status}`);
+              await new Promise(r => setTimeout(r, waitTime));
+              retries++;
+              continue;
+            }
+            throw new Error(`Last.fm API error: ${response.status}`);
           }
-       }
+
+          pageData = await response.json();
+          break; // success, exit retry loop
+
+        } catch (err) {
+          clearTimeout(timeout);
+          if (err.name === 'AbortError') {
+            console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retries + 1}`);
+          } else {
+            console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
+          }
+
+          if (retries < maxRetries - 1) {
+            const waitTime = Math.pow(2, retries) * 1000;
+            await new Promise(r => setTimeout(r, waitTime));
+            retries++;
+          } else {
+            console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
+            pageData = null;
+            break;
+          }
+        }
+      }
+
+      if (!pageData || !pageData.topalbums || !pageData.topalbums.album) {
+        console.log("  ⚠️ No more albums found or failed to fetch page."); 
+        break; 
+      }
+
+      const albums = Array.isArray(pageData.topalbums.album) ? pageData.topalbums.album : [pageData.topalbums.album];
        
-       await new Promise(r => setTimeout(r, 1000));
+      for (const a of albums) {
+        try {
+          const mbData = await getMusicBrainzData(a.artist.name, a.name);
+
+          await dbRun(`
+            INSERT INTO albums_global (
+              musicbrainz_id, album_name, artist_name, 
+              canonical_album, canonical_artist, release_year,
+              image_url, lastfm_url, album_type, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+            ON CONFLICT(musicbrainz_id) 
+            DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+          `, [
+            mbData.musicbrainz_id, a.name, a.artist.name, mbData.canonical_name, 
+            mbData.canonical_artist, mbData.release_year, 
+            a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+            a.url, mbData.type
+          ]);
+
+          await dbRun(`
+            INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT(username, musicbrainz_id) 
+            DO UPDATE SET playcount = EXCLUDED.playcount, updated_at = CURRENT_TIMESTAMP
+          `, [username, mbData.musicbrainz_id, parseInt(a.playcount)]);
+          
+          totalUpdated++;
+          if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums`);
+
+        } catch (innerErr) {
+          console.error(`  ⚠️ Skipped album: ${a.name}`);
+        }
+      }
+
+      // small delay between pages
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     const updateQuery = `
@@ -636,71 +717,60 @@ app.get('/api/top-albums', async (req, res) => {
       let allAlbums = [];
       
       for (let page = 1; page <= pagesToFetch; page++) {
-        const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
+        const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
         
         let retryCount = 0;
         const maxRetries = 3;
         let pageSuccess = false;
         
         while (retryCount < maxRetries && !pageSuccess) {
-          try {
-            const response = await fetch(lastfmUrl, { timeout: 10000 });
-            
-            if (!response.ok) {
-              if ((response.status === 503 || response.status === 429) && retryCount < maxRetries - 1) {
-                const waitTime = Math.pow(2, retryCount) * 1000;
-                console.log(`  ⏳ Retrying in ${waitTime/1000}s...`);
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-                retryCount++;
-                continue;
-              }
-              
-              if (allAlbums.length > 0) {
-                pageSuccess = true;
-                break;
-              }
-              
-              let errorMessage = 'Last.fm API error';
-              try {
-                const errorData = await response.json();
-                if (errorData.message) errorMessage = errorData.message;
-              } catch (e) {}
-              
-              console.log(`  ❌ Query failed`);
-              return res.status(response.status).json({ error: errorMessage });
-            }
-            
-            const data = await response.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+  try {
+    const response = await fetch(lastfmUrl, { signal: controller.signal });
 
-            if (!data.topalbums || !data.topalbums.album) {
-              pageSuccess = true;
-              break;
-            }
+    clearTimeout(timeout);
 
-            const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-            allAlbums.push(...albums);
-            
-            console.log(`    ✓ Page ${page}: ${albums.length} albums (total: ${allAlbums.length})`);
-            
-            pageSuccess = true;
-            
-            if (albums.length < perPage) break;
-            
-          } catch (fetchError) {
-            if (retryCount < maxRetries - 1) {
-              const waitTime = Math.pow(2, retryCount) * 1000;
-              await new Promise(resolve => setTimeout(resolve, waitTime));
-              retryCount++;
-              continue;
-            }
-            
-            if (allAlbums.length > 0) {
-              pageSuccess = true;
-              break;
-            }
-            throw fetchError;
-          }
-        }
+    if (!response.ok) {
+      if ((response.status === 429 || response.status === 503) && retryCount < maxRetries - 1) {
+        const waitTime = Math.pow(2, retryCount) * 1000;
+        console.log(`  ⏳ Retrying in ${waitTime/1000}s due to ${response.status}`);
+        await new Promise(r => setTimeout(r, waitTime));
+        retryCount++;
+        continue;
+      }
+      throw new Error(`Last.fm API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    allAlbums.push(...(Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album]));
+    
+    console.log(`    ✓ Page ${page}: ${(Array.isArray(data.topalbums.album) ? data.topalbums.album.length : 1)} albums (total: ${allAlbums.length})`);
+
+    pageSuccess = true;
+    clearTimeout(timeout);
+
+    if (!data.topalbums.album || (Array.isArray(data.topalbums.album) && data.topalbums.album.length < perPage)) break;
+
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') {
+      console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retryCount + 1}`);
+    } else {
+      console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
+    }
+
+    if (retryCount < maxRetries - 1) {
+      const waitTime = Math.pow(2, retryCount) * 1000;
+      await new Promise(r => setTimeout(r, waitTime));
+      retryCount++;
+    } else {
+      console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
+      pageSuccess = true; // break the loop gracefully
+    }
+  }
+}
+
         
         if (!pageSuccess && allAlbums.length === 0) break;
         if (page < pagesToFetch && pageSuccess) {
