@@ -971,9 +971,12 @@ app.get('/api/top-albums', async (req, res) => {
     return;
   }
   
+  // ... (Previous code: "return;" from the real-time block)
+
   console.log(`🟢 Mode: CACHED`);
 
   try {
+    // 1. Base Query with $1 placeholder for username
     let query = `
       SELECT 
         ag.musicbrainz_id,
@@ -990,41 +993,46 @@ app.get('/api/top-albums', async (req, res) => {
       JOIN albums_global ag ON ua.musicbrainz_id = ag.musicbrainz_id
       WHERE ua.username = $1
     `;
+    
+    // 2. Initialize params array with username
     const params = [username];
-    let paramIndex = 2;
+    let pIdx = 2; // Start counting extra params from $2
 
+    // 3. Add Year or Decade Filters using $ placeholders
     if (year) {
-      query += ` AND ag.release_year = ${paramIndex}`;
-      query += ` AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year = $${pIdx} AND ag.release_year IS NOT NULL`;
       params.push(year);
-      paramIndex++;
-    } else if (decade) {
-      const decadeStart = decade;
-      const decadeEnd = decade + 9;
-      query += ` AND ag.release_year BETWEEN ${paramIndex} AND ${paramIndex + 1}`;
-      query += ` AND ag.release_year IS NOT NULL`;
-      params.push(decadeStart, decadeEnd);
-      paramIndex += 2;
-    } else if (yearStart && yearEnd) {
-      query += ` AND ag.release_year BETWEEN ${paramIndex} AND ${paramIndex + 1}`;
-      query += ` AND ag.release_year IS NOT NULL`;
-      params.push(yearStart, yearEnd);
-      paramIndex += 2;
+      pIdx++;
+    } 
+    else if (decade || (yearStart && yearEnd)) {
+      // Handle both "decade" param and "yearStart/End" param
+      const start = decade || yearStart;
+      const end = decade ? (decade + 9) : yearEnd;
+      
+      query += ` AND ag.release_year BETWEEN $${pIdx} AND $${pIdx + 1} AND ag.release_year IS NOT NULL`;
+      params.push(start, end);
+      pIdx += 2;
     }
 
+    // 4. Add Artist Filter
     if (artist) {
-      query += ` AND (LOWER(ag.artist_name) LIKE ${paramIndex} OR LOWER(ag.canonical_artist) LIKE ${paramIndex + 1})`;
+      query += ` AND (LOWER(ag.artist_name) LIKE $${pIdx} OR LOWER(ag.canonical_artist) LIKE $${pIdx + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
-      paramIndex += 2;
+      pIdx += 2;
     }
 
-    query += ` ORDER BY ua.playcount DESC LIMIT ${paramIndex}`;
+    // 5. Add Sorting and LIMIT
+    // IMPORTANT: We must use the $ symbol for the limit parameter too
+    query += ` ORDER BY ua.playcount DESC LIMIT $${pIdx}`;
     params.push(limit);
 
+    // 6. Execute Query
     const albums = await dbQuery(query, params);
-    const user = await dbGet('SELECT * FROM users WHERE username = $1', [username]);
+    
+    // Check if user exists to prevent empty cache confusion
+    const userEntry = await dbGet('SELECT * FROM users WHERE username = $1', [username]);
 
-    if (!user) {
+    if (!userEntry) {
       console.log(`  ⚠️  User not in cache`);
       console.log('='.repeat(60) + '\n');
       return res.status(404).json({ error: 'User not cached' });
