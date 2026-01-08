@@ -306,27 +306,55 @@
             setTimeout(sendHeight, 500);
         }
 
+       // ... (keep your loadAlbums and displayAlbums functions as they are) ...
+
+        let lastSentHeight = 0;
+
         function sendHeight() {
-            const height = document.documentElement.scrollHeight + 20;
-            window.parent.postMessage({ 
-                type: 'resize', 
-                height: height 
-            }, '*');
+            const container = document.querySelector('.widget-container');
+            if (!container) return;
+
+            // Measure the container explicitly rather than the whole document
+            // We add 30px to account for the body padding (10px) + safety buffer
+            const newHeight = container.getBoundingClientRect().height + 30;
+            
+            // STOP THE LOOP: Only send message if height changed by more than 2 pixels
+            if (Math.abs(newHeight - lastSentHeight) > 2) {
+                console.log(`Resize: ${lastSentHeight} -> ${newHeight}`); // Debug log
+                lastSentHeight = newHeight;
+                
+                window.parent.postMessage({ 
+                    type: 'resize', 
+                    height: newHeight 
+                }, '*');
+            }
         }
 
         // Initialize
         loadAlbums();
         
-        // Send height on various events
-        window.addEventListener('load', sendHeight);
-        window.addEventListener('resize', sendHeight);
+        // Use a Debounce for the resize event to prevent rapid-fire updates
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(sendHeight, 100);
+        });
         
-        // Observer for DOM changes
-        const observer = new MutationObserver(sendHeight);
+        // Keep the MutationObserver, it's good for dynamic content loading
+        const observer = new MutationObserver((mutations) => {
+            // Check if actual nodes were added/removed or style changed significantly
+            const shouldUpdate = mutations.some(m => 
+                m.type === 'childList' || 
+                (m.type === 'attributes' && m.attributeName === 'style')
+            );
+            if (shouldUpdate) sendHeight();
+        });
+        
         observer.observe(document.body, { 
             childList: true, 
             subtree: true, 
-            attributes: true 
+            attributes: true,
+            attributeFilter: ['style', 'class'] // Filter to reduce noise
         });
     </script>
 </body>
