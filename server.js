@@ -1,15 +1,15 @@
 require('dotenv').config();
 const express = require('express');
 const fetch = require('node-fetch');
-const rateLimit = require('express-rate-limit'); // Rate Limit Import
+const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AbortController = require('abort-controller');
 
 // ==========================================
-// 🚀 SHORT-TERM REQUEST CACHE (New Feature)
+// 🚀 SHORT-TERM REQUEST CACHE
 // ==========================================
-const queryCache = new Map(); // Stores final API responses
+const queryCache = new Map();
 
 function getQueryCache(key) {
   const entry = queryCache.get(key);
@@ -21,8 +21,7 @@ function getQueryCache(key) {
   return entry.data;
 }
 
-function setQueryCache(key, data, ttlMs = 600000) { // Default 10 minutes
-  // Safety: Prevent memory leaks by limiting cache size
+function setQueryCache(key, data, ttlMs = 600000) {
   if (queryCache.size > 1000) {
     const firstKey = queryCache.keys().next().value;
     queryCache.delete(firstKey);
@@ -44,7 +43,10 @@ if (process.env.DATABASE_URL) {
   const { Pool } = require('pg');
   db = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
   });
   dbType = 'postgres';
 } else {
@@ -96,6 +98,7 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
       CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
       CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
     `);
   } else {
     db.exec(`
@@ -134,6 +137,7 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
       CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
       CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
     `);
   }
 }
@@ -162,7 +166,6 @@ async function dbRun(query, params = []) {
   }
 }
 
-// Updated DB Initialization with Stats Logging
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
   console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
@@ -178,10 +181,10 @@ initDatabase().then(async () => {
 });
 
 const mbCache = new Map();
+const mbFailureCache = new Map(); // ⭐ NEW: Track failed lookups
 
 const cron = require('node-cron');
 
-// Run every Sunday at 3am (when traffic is low)
 cron.schedule('0 3 * * 0', async () => {
   console.log('🔄 Starting weekly auto-update...');
   
@@ -192,7 +195,6 @@ cron.schedule('0 3 * * 0', async () => {
       await new Promise(r => setTimeout(r, 60000));
     } catch (err) {
       console.error(`  ❌ Failed to update ${user}:`, err);
-      // Continue with next user instead of crashing
     }
   }
   
@@ -219,12 +221,11 @@ function cleanArtistName(name) {
 function normalizeForComparison(str) {
   try {
     return str.toLowerCase()
-      .normalize('NFD') // Decompose combined characters (é -> e + ´)
-      .replace(/[\u0300-\u036f]/g, '') // Remove diacritics/accents
-      .replace(/[^\p{L}\p{N}]/gu, '') // Keep only letters & numbers (Unicode-aware)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\p{L}\p{N}]/gu, '')
       .trim();
   } catch (e) {
-    // Fallback for older Node.js versions without Unicode property escapes
     return str.toLowerCase()
       .replace(/[^a-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/gi, '')
       .trim();
@@ -235,24 +236,16 @@ function stringSimilarity(str1, str2) {
   const s1 = normalizeForComparison(str1);
   const s2 = normalizeForComparison(str2);
   
-  // Exact match
   if (s1 === s2) return 1.0;
-  
-  // Empty strings
   if (s1.length === 0 || s2.length === 0) return 0.0;
-  
-  // Substring match (high confidence)
   if (s1.includes(s2) || s2.includes(s1)) return 0.85;
   
-  // Character overlap (Jaccard similarity)
   const chars1 = new Set(s1);
   const chars2 = new Set(s2);
   const intersection = new Set([...chars1].filter(x => chars2.has(x)));
   const union = new Set([...chars1, ...chars2]);
   
   const jaccard = intersection.size / union.size;
-  
-  // Length similarity bonus
   const lengthRatio = Math.min(s1.length, s2.length) / Math.max(s1.length, s2.length);
   
   return jaccard * 0.7 + lengthRatio * 0.3;
@@ -263,6 +256,21 @@ async function getMusicBrainzData(artist, album) {
   
   if (mbCache.has(cacheKey)) {
     return mbCache.get(cacheKey);
+  }
+
+  // ⭐ NEW: Check if we recently failed this lookup
+  if (mbFailureCache.has(cacheKey)) {
+    const failTime = mbFailureCache.get(cacheKey);
+    if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
+      const cleanedAlbum = cleanAlbumName(album);
+      return { 
+        musicbrainz_id: `fallback_${cleanedAlbum}_${artist}`, 
+        release_year: null, 
+        type: null,
+        canonical_name: cleanedAlbum,
+        canonical_artist: artist
+      };
+    }
   }
 
   try {
@@ -321,67 +329,59 @@ async function getMusicBrainzData(artist, album) {
           return true;
         })
         .map(rg => {
-  const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
-  const primaryType = rg['primary-type']?.toLowerCase() || null;
-  const rgArtist = rg['artist-credit']?.[0]?.name || "";
+          const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
+          const primaryType = rg['primary-type']?.toLowerCase() || null;
+          const rgArtist = rg['artist-credit']?.[0]?.name || "";
 
-  const artistSimilarity = stringSimilarity(artist, rgArtist);
-  const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
+          const artistSimilarity = stringSimilarity(artist, rgArtist);
+          const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
 
-  let score = 0;
+          let score = 0;
 
-  // Core evidence (dominates the decision)
-  score += artistSimilarity * 250;
-  score += titleSimilarity * 200;
+          score += artistSimilarity * 250;
+          score += titleSimilarity * 200;
 
-  // Prefer full albums
-  if (primaryType === 'album') score += 150;
-  else if (primaryType === 'ep') score += 50;
+          if (primaryType === 'album') score += 150;
+          else if (primaryType === 'ep') score += 50;
 
-  // Penalize non-studio editions (deluxe, live, compilation, etc.)
-  const badSecondaryTypes = ['compilation', 'live', 'soundtrack'];
-  if (
-    rg['secondary-types']?.some(t =>
-      badSecondaryTypes.includes(t.toLowerCase())
-    )
-  ) {
-    score -= 80;
-  }
+          const badSecondaryTypes = ['compilation', 'live', 'soundtrack'];
+          if (
+            rg['secondary-types']?.some(t =>
+              badSecondaryTypes.includes(t.toLowerCase())
+            )
+          ) {
+            score -= 80;
+          }
 
-  // Exact-match boosts (safe and intentional)
-  if (
-    normalizeForComparison(rg.title) ===
-    normalizeForComparison(cleanedAlbum)
-  ) {
-    score += 100;
-  }
+          if (
+            normalizeForComparison(rg.title) ===
+            normalizeForComparison(cleanedAlbum)
+          ) {
+            score += 100;
+          }
 
-  if (
-    normalizeForComparison(rgArtist) ===
-    normalizeForComparison(artist)
-  ) {
-    score += 100;
-  }
+          if (
+            normalizeForComparison(rgArtist) ===
+            normalizeForComparison(artist)
+          ) {
+            score += 100;
+          }
 
-  return {
-    ...rg,
-    score,
-    year,
-    artistSimilarity,
-    titleSimilarity,
-    rgArtist
-  };
-})
-.sort((a, b) => {
-  // 1. Correctness first
-  if (Math.abs(b.score - a.score) > 10) {
-    return b.score - a.score;
-  }
-
-  // 2. Among equally correct matches, earliest release wins
-  return a.year - b.year;
-});
-
+          return {
+            ...rg,
+            score,
+            year,
+            artistSimilarity,
+            titleSimilarity,
+            rgArtist
+          };
+        })
+        .sort((a, b) => {
+          if (Math.abs(b.score - a.score) > 10) {
+            return b.score - a.score;
+          }
+          return a.year - b.year;
+        });
       
       if (candidates.length > 0) {
         const best = candidates[0];
@@ -394,9 +394,13 @@ async function getMusicBrainzData(artist, album) {
         };
         
         mbCache.set(cacheKey, result);
+        mbFailureCache.delete(cacheKey); // ⭐ Clear failure cache on success
         return result;
       }
     }
+    
+    // ⭐ NEW: Mark as failed
+    mbFailureCache.set(cacheKey, Date.now());
     
     const noMatch = { 
       musicbrainz_id: `fallback_${cleanAlbumName(album)}_${artist}`, 
@@ -410,6 +414,10 @@ async function getMusicBrainzData(artist, album) {
     
   } catch (err) {
     console.error(`MusicBrainz lookup failed for ${artist} - ${album}:`, err.message);
+    
+    // ⭐ NEW: Mark as failed
+    mbFailureCache.set(cacheKey, Date.now());
+    
     const cleanedAlbum = cleanAlbumName(album);
     return { 
       musicbrainz_id: `fallback_${cleanedAlbum}_${artist}`, 
@@ -419,6 +427,62 @@ async function getMusicBrainzData(artist, album) {
       canonical_artist: artist
     };
   }
+}
+
+// ⭐ NEW: Helper function to find existing albums
+async function findExistingAlbum(canonicalAlbum, canonicalArtist) {
+  const existing = await dbGet(`
+    SELECT musicbrainz_id, release_year
+    FROM albums_global
+    WHERE canonical_album = $1 
+      AND canonical_artist = $2
+    ORDER BY 
+      CASE 
+        WHEN release_year IS NOT NULL THEN 0 
+        ELSE 1 
+      END,
+      musicbrainz_id
+    LIMIT 1
+  `, [canonicalAlbum, canonicalArtist]);
+  
+  return existing;
+}
+
+// ⭐ NEW: Merge fallback entries into canonical entries
+async function mergeIntoCanonical(fallbackId, canonicalId) {
+  console.log(`  🔄 Merging ${fallbackId} → ${canonicalId}`);
+  
+  if (dbType === 'postgres') {
+    await db.query(`
+      INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
+      SELECT username, $2, playcount, CURRENT_TIMESTAMP
+      FROM user_albums
+      WHERE musicbrainz_id = $1
+      ON CONFLICT (username, musicbrainz_id)
+      DO UPDATE SET 
+        playcount = user_albums.playcount + EXCLUDED.playcount,
+        updated_at = CURRENT_TIMESTAMP
+    `, [fallbackId, canonicalId]);
+  } else {
+    const userEntries = await dbQuery(
+      'SELECT username, playcount FROM user_albums WHERE musicbrainz_id = ?',
+      [fallbackId]
+    );
+    
+    for (const entry of userEntries) {
+      await dbRun(`
+        INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(username, musicbrainz_id) 
+        DO UPDATE SET 
+          playcount = playcount + excluded.playcount,
+          updated_at = CURRENT_TIMESTAMP
+      `, [entry.username, canonicalId, entry.playcount]);
+    }
+  }
+  
+  await dbRun('DELETE FROM user_albums WHERE musicbrainz_id = $1', [fallbackId]);
+  await dbRun('DELETE FROM albums_global WHERE musicbrainz_id = $1', [fallbackId]);
 }
 
 async function fetchAllAlbums(username, totalLimit) {
@@ -473,6 +537,7 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
+// ⭐ UPDATED: performBackgroundUpdate with duplicate prevention
 async function performBackgroundUpdate(username, full, limit) {
   const processStart = Date.now();
   console.log(`🚀 BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
@@ -486,6 +551,7 @@ async function performBackgroundUpdate(username, full, limit) {
     const perPage = 50; 
     const pages = Math.ceil(limit / perPage);
     let totalUpdated = 0;
+    let mergedCount = 0;
 
     for (let page = 1; page <= pages; page++) {
       console.log(`\n📄 BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
@@ -497,7 +563,7 @@ async function performBackgroundUpdate(username, full, limit) {
 
       while (retries < maxRetries) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        const timeout = setTimeout(() => controller.abort(), 10000);
         try {
           const response = await fetch(lastfmUrl, { signal: controller.signal });
 
@@ -515,7 +581,7 @@ async function performBackgroundUpdate(username, full, limit) {
           }
 
           pageData = await response.json();
-          break; // success, exit retry loop
+          break;
 
         } catch (err) {
           clearTimeout(timeout);
@@ -547,7 +613,49 @@ async function performBackgroundUpdate(username, full, limit) {
       for (const a of albums) {
         try {
           const mbData = await getMusicBrainzData(a.artist.name, a.name);
-
+          
+          // ⭐ NEW: Check if this album already exists by canonical name
+          const existing = await findExistingAlbum(
+            mbData.canonical_name, 
+            mbData.canonical_artist
+          );
+          
+          let finalMbId = mbData.musicbrainz_id;
+          
+          if (existing) {
+            if (existing.release_year && !mbData.release_year) {
+              // Existing has year, new doesn't → use existing
+              finalMbId = existing.musicbrainz_id;
+              if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
+                await mergeIntoCanonical(mbData.musicbrainz_id, existing.musicbrainz_id);
+                mergedCount++;
+              }
+              
+            } else if (!existing.release_year && mbData.release_year) {
+              // New has year, existing doesn't → upgrade
+              finalMbId = mbData.musicbrainz_id;
+              
+              if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
+                await mergeIntoCanonical(existing.musicbrainz_id, mbData.musicbrainz_id);
+                mergedCount++;
+              }
+              
+            } else if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
+              const existingIsFallback = existing.musicbrainz_id.startsWith('fallback_');
+              const newIsFallback = mbData.musicbrainz_id.startsWith('fallback_');
+              
+              if (existingIsFallback && !newIsFallback) {
+                finalMbId = mbData.musicbrainz_id;
+                await mergeIntoCanonical(existing.musicbrainz_id, mbData.musicbrainz_id);
+                mergedCount++;
+              } else {
+                finalMbId = existing.musicbrainz_id;
+              }
+            } else {
+              finalMbId = existing.musicbrainz_id;
+            }
+          }
+          
           await dbRun(`
             INSERT INTO albums_global (
               musicbrainz_id, album_name, artist_name, 
@@ -555,30 +663,45 @@ async function performBackgroundUpdate(username, full, limit) {
               image_url, lastfm_url, album_type, updated_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
             ON CONFLICT(musicbrainz_id) 
-            DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            DO UPDATE SET 
+              album_name = EXCLUDED.album_name,
+              artist_name = EXCLUDED.artist_name,
+              canonical_album = EXCLUDED.canonical_album,
+              canonical_artist = EXCLUDED.canonical_artist,
+              release_year = COALESCE(EXCLUDED.release_year, albums_global.release_year),
+              image_url = EXCLUDED.image_url,
+              lastfm_url = EXCLUDED.lastfm_url,
+              album_type = EXCLUDED.album_type,
+              updated_at = CURRENT_TIMESTAMP
           `, [
-            mbData.musicbrainz_id, a.name, a.artist.name, mbData.canonical_name, 
-            mbData.canonical_artist, mbData.release_year, 
+            finalMbId, 
+            a.name, 
+            a.artist.name, 
+            mbData.canonical_name, 
+            mbData.canonical_artist, 
+            mbData.release_year, 
             a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-            a.url, mbData.type
+            a.url, 
+            mbData.type
           ]);
 
           await dbRun(`
             INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
             ON CONFLICT(username, musicbrainz_id) 
-            DO UPDATE SET playcount = EXCLUDED.playcount, updated_at = CURRENT_TIMESTAMP
-          `, [username, mbData.musicbrainz_id, parseInt(a.playcount)]);
+            DO UPDATE SET 
+              playcount = EXCLUDED.playcount, 
+              updated_at = CURRENT_TIMESTAMP
+          `, [username, finalMbId, parseInt(a.playcount)]);
           
           totalUpdated++;
-          if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums`);
+          if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums (merged ${mergedCount})`);
 
         } catch (innerErr) {
           console.error(`  ⚠️ Skipped album: ${a.name}`);
         }
       }
 
-      // small delay between pages
       await new Promise(r => setTimeout(r, 1000));
     }
 
@@ -591,7 +714,7 @@ async function performBackgroundUpdate(username, full, limit) {
     await dbRun(updateQuery, [username]);
     
     const duration = ((Date.now() - processStart) / 1000).toFixed(1);
-    console.log(`✅ BACKGROUND: Finished ${username}. Updated ${totalUpdated} albums in ${duration}s`);
+    console.log(`✅ BACKGROUND: Finished ${username}. Updated ${totalUpdated} albums, merged ${mergedCount} duplicates in ${duration}s`);
 
   } catch (err) {
     console.error(`❌ BACKGROUND ERROR for ${username}:`, err);
@@ -623,14 +746,12 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Protection: Define Rate Limiter
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // 50 requests per 15 min per IP
+  windowMs: 15 * 60 * 1000,
+  max: 50,
   message: { error: 'Too many requests, please try again later' }
 });
 
-// Health Check Endpoint
 app.get('/health', (req, res) => {
   res.json({
      status: 'ok',
@@ -668,11 +789,9 @@ app.get('/api/update', (req, res) => {
   performBackgroundUpdate(username, full, limit);
 });
 
-// Apply Rate Limiter specifically to top-albums
 app.use('/api/top-albums', apiLimiter);
 
 app.get('/api/top-albums', async (req, res) => {
-  // Request Timing Start
   const requestStart = Date.now();
 
   const username = req.query.user;
@@ -685,10 +804,6 @@ app.get('/api/top-albums', async (req, res) => {
   const artist = req.query.artist ? req.query.artist.toLowerCase() : null;
   const limit = req.query.limit ? parseInt(req.query.limit) : 50;
 
-  // ==========================================
-  // ⚡ SHORT-TERM CACHE CHECK
-  // ==========================================
-  // Create a unique key for this exact request
   const cacheKey = `req:${username}|y:${year}|d:${decade}|r:${yearStart}-${yearEnd}|a:${artist}|l:${limit}`;
   const cachedResult = getQueryCache(cacheKey);
 
@@ -696,7 +811,6 @@ app.get('/api/top-albums', async (req, res) => {
     console.log(`⚡ Serving from short-term cache: ${cacheKey}`);
     return res.json(cachedResult);
   }
-  // ==========================================
 
   console.log('\n' + '='.repeat(60));
   console.log(formatQueryLog(username, { year, decade, yearStart, yearEnd, limit, artist }));
@@ -724,53 +838,51 @@ app.get('/api/top-albums', async (req, res) => {
         let pageSuccess = false;
         
         while (retryCount < maxRetries && !pageSuccess) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
-  try {
-    const response = await fetch(lastfmUrl, { signal: controller.signal });
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000);
+          try {
+            const response = await fetch(lastfmUrl, { signal: controller.signal });
 
-    clearTimeout(timeout);
+            clearTimeout(timeout);
 
-    if (!response.ok) {
-      if ((response.status === 429 || response.status === 503) && retryCount < maxRetries - 1) {
-        const waitTime = Math.pow(2, retryCount) * 1000;
-        console.log(`  ⏳ Retrying in ${waitTime/1000}s due to ${response.status}`);
-        await new Promise(r => setTimeout(r, waitTime));
-        retryCount++;
-        continue;
-      }
-      throw new Error(`Last.fm API error: ${response.status}`);
-    }
+            if (!response.ok) {
+              if ((response.status === 429 || response.status === 503) && retryCount < maxRetries - 1) {
+                const waitTime = Math.pow(2, retryCount) * 1000;
+                console.log(`  ⏳ Retrying in ${waitTime/1000}s due to ${response.status}`);
+                await new Promise(r => setTimeout(r, waitTime));
+                retryCount++;
+                continue;
+              }
+              throw new Error(`Last.fm API error: ${response.status}`);
+            }
 
-    const data = await response.json();
-    allAlbums.push(...(Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album]));
-    
-    console.log(`    ✓ Page ${page}: ${(Array.isArray(data.topalbums.album) ? data.topalbums.album.length : 1)} albums (total: ${allAlbums.length})`);
+            const data = await response.json();
+            allAlbums.push(...(Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album]));
+            
+            console.log(`    ✓ Page ${page}: ${(Array.isArray(data.topalbums.album) ? data.topalbums.album.length : 1)} albums (total: ${allAlbums.length})`);
 
-    pageSuccess = true;
-    clearTimeout(timeout);
+            pageSuccess = true;
 
-    if (!data.topalbums.album || (Array.isArray(data.topalbums.album) && data.topalbums.album.length < perPage)) break;
+            if (!data.topalbums.album || (Array.isArray(data.topalbums.album) && data.topalbums.album.length < perPage)) break;
 
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === 'AbortError') {
-      console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retryCount + 1}`);
-    } else {
-      console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
-    }
+          } catch (err) {
+            clearTimeout(timeout);
+            if (err.name === 'AbortError') {
+              console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retryCount + 1}`);
+            } else {
+              console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
+            }
 
-    if (retryCount < maxRetries - 1) {
-      const waitTime = Math.pow(2, retryCount) * 1000;
-      await new Promise(r => setTimeout(r, waitTime));
-      retryCount++;
-    } else {
-      console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
-      pageSuccess = true; // break the loop gracefully
-    }
-  }
-}
-
+            if (retryCount < maxRetries - 1) {
+              const waitTime = Math.pow(2, retryCount) * 1000;
+              await new Promise(r => setTimeout(r, waitTime));
+              retryCount++;
+            } else {
+              console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
+              pageSuccess = true;
+            }
+          }
+        }
         
         if (!pageSuccess && allAlbums.length === 0) break;
         if (page < pagesToFetch && pageSuccess) {
@@ -835,7 +947,6 @@ app.get('/api/top-albums', async (req, res) => {
       console.log(`  ✅ Returning ${processedAlbums.length} albums`);
       console.log('='.repeat(60) + '\n');
 
-      // Request Timing End (Realtime)
       const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
       console.log(`  ⏱️  Request completed in ${duration}s`);
 
@@ -848,7 +959,6 @@ app.get('/api/top-albums', async (req, res) => {
         albums: processedAlbums
       };
 
-      // ⚡ Save to Short-Term Cache
       setQueryCache(cacheKey, responseData);
 
       return res.json(responseData);
@@ -884,31 +994,31 @@ app.get('/api/top-albums', async (req, res) => {
     let paramIndex = 2;
 
     if (year) {
-      query += ` AND ag.release_year = $${paramIndex}`;
+      query += ` AND ag.release_year = ${paramIndex}`;
       query += ` AND ag.release_year IS NOT NULL`;
       params.push(year);
       paramIndex++;
     } else if (decade) {
       const decadeStart = decade;
       const decadeEnd = decade + 9;
-      query += ` AND ag.release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+      query += ` AND ag.release_year BETWEEN ${paramIndex} AND ${paramIndex + 1}`;
       query += ` AND ag.release_year IS NOT NULL`;
       params.push(decadeStart, decadeEnd);
       paramIndex += 2;
     } else if (yearStart && yearEnd) {
-      query += ` AND ag.release_year BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
+      query += ` AND ag.release_year BETWEEN ${paramIndex} AND ${paramIndex + 1}`;
       query += ` AND ag.release_year IS NOT NULL`;
       params.push(yearStart, yearEnd);
       paramIndex += 2;
     }
 
     if (artist) {
-      query += ` AND (LOWER(ag.artist_name) LIKE $${paramIndex} OR LOWER(ag.canonical_artist) LIKE $${paramIndex + 1})`;
+      query += ` AND (LOWER(ag.artist_name) LIKE ${paramIndex} OR LOWER(ag.canonical_artist) LIKE ${paramIndex + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
       paramIndex += 2;
     }
 
-    query += ` ORDER BY ua.playcount DESC LIMIT $${paramIndex}`;
+    query += ` ORDER BY ua.playcount DESC LIMIT ${paramIndex}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
@@ -923,7 +1033,6 @@ app.get('/api/top-albums', async (req, res) => {
     console.log(`  ✅ Returning ${albums.length} albums from cache`);
     console.log('='.repeat(60) + '\n');
 
-    // Request Timing End (Cached)
     const duration = ((Date.now() - requestStart) / 1000).toFixed(2);
     console.log(`  ⏱️  Request completed in ${duration}s`);
 
@@ -944,7 +1053,6 @@ app.get('/api/top-albums', async (req, res) => {
       }))
     };
 
-    // ⚡ Save to Short-Term Cache
     setQueryCache(cacheKey, responseData);
 
     res.json(responseData);
@@ -1000,11 +1108,11 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = $${paramIndex}`;
+      query += ` WHERE release_year = ${paramIndex}`;
       params.push(year);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex + (year ? 1 : 0)}`;
+    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex + (year ? 1 : 0)}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
@@ -1027,5 +1135,3 @@ app.listen(PORT, () => {
   console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
   console.log(`🔴 Public users: real-time mode\n`);
 });
-
-
