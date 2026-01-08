@@ -3,6 +3,7 @@ const express = require('express');
 const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const AbortController = require('abort-controller');
 
@@ -1116,11 +1117,11 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = ${paramIndex}`;
+      query += ` WHERE release_year = $${paramIndex}`;
       params.push(year);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex + (year ? 1 : 0)}`;
+    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex + (year ? 1 : 0)}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
