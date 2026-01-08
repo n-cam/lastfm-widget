@@ -9,77 +9,246 @@
     <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Martian Mono', monospace; background: transparent; padding: 10px; }
+        body { 
+            font-family: 'Martian Mono', monospace; 
+            background: transparent; 
+            padding: 10px;
+            overflow-x: hidden;
+        }
         .widget-container { width: 100%; max-width: 100%; }
         .widget-header { margin-bottom: 20px; }
-        .widget-title { font-size: 24px; font-weight: 600; color: #4A1DC0; margin-bottom: 8px; }
-        .loading { text-align: center; padding: 40px 20px; color: #4A1DC0; }
-        .loading-spinner { display: inline-block; width: 40px; height: 40px; border: 4px solid #C4E0E0; border-top-color: #4A1DC0; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        .widget-title { 
+            font-size: 24px; 
+            font-weight: 600; 
+            color: #4A1DC0; 
+            margin-bottom: 8px; 
+        }
+        .loading { 
+            text-align: center; 
+            padding: 40px 20px; 
+            color: #4A1DC0; 
+        }
+        .loading-spinner { 
+            display: inline-block; 
+            width: 40px; 
+            height: 40px; 
+            border: 4px solid #C4E0E0; 
+            border-top-color: #4A1DC0; 
+            border-radius: 50%; 
+            animation: spin 1s linear infinite; 
+            margin-bottom: 15px; 
+        }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .error { background: #FF6B6B; color: white; padding: 15px; border: 3px solid #d93636; border-radius: 8px; text-align: center; font-weight: 700; box-shadow: 4px 4px 0 #d93636; }
-        .albums-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
-        .album-card { background: white; border: 2px solid #4A1DC0; border-radius: 12px; overflow: hidden; transition: all 0.2s; box-shadow: 2px 4px 0 #4A1DC0; cursor: pointer; }
-        .album-card:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #4A1DC0; }
-        .album-cover { width: 100%; aspect-ratio: 1; object-fit: cover; background: #C4E0E0; display: block; }
+        
+        .cold-start-message {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+        
+        .error { 
+            background: #FF6B6B; 
+            color: white; 
+            padding: 15px; 
+            border: 3px solid #d93636; 
+            border-radius: 8px; 
+            text-align: center; 
+            font-weight: 700; 
+            box-shadow: 4px 4px 0 #d93636; 
+        }
+        
+        .albums-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); 
+            gap: 16px; 
+        }
+        
+        .album-card { 
+            background: white; 
+            border: 2px solid #4A1DC0; 
+            border-radius: 12px; 
+            overflow: hidden; 
+            transition: all 0.2s; 
+            box-shadow: 2px 4px 0 #4A1DC0; 
+            cursor: pointer; 
+        }
+        
+        .album-card:hover { 
+            transform: translate(-2px, -2px); 
+            box-shadow: 6px 6px 0 #4A1DC0; 
+        }
+        
+        .album-cover { 
+            width: 100%; 
+            aspect-ratio: 1; 
+            object-fit: cover; 
+            background: #C4E0E0; 
+            display: block; 
+        }
+        
         .album-info { padding: 10px; }
-        .album-name { font-weight: 700; font-size: 11px; margin-bottom: 4px; color: #4A1DC0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
-        .album-artist { color: #4A1DC0; font-size: 10px; margin-bottom: 6px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .no-results { text-align: center; padding: 40px 20px; font-size: 14px; color: #4A1DC0; }
-        @media (max-width: 768px) { .albums-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; } .widget-title { font-size: 20px; } }
+        
+        .album-name { 
+            font-weight: 700; 
+            font-size: 11px; 
+            margin-bottom: 4px; 
+            color: #4A1DC0; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            display: -webkit-box; 
+            -webkit-line-clamp: 2; 
+            -webkit-box-orient: vertical; 
+            line-height: 1.3; 
+        }
+        
+        .album-artist { 
+            color: #4A1DC0; 
+            font-size: 10px; 
+            margin-bottom: 6px; 
+            opacity: 0.7; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            white-space: nowrap; 
+        }
+        
+        .no-results { 
+            text-align: center; 
+            padding: 40px 20px; 
+            font-size: 14px; 
+            color: #4A1DC0; 
+        }
+        
+        @media (max-width: 768px) { 
+            .albums-grid { 
+                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
+                gap: 12px; 
+            } 
+            .widget-title { font-size: 20px; } 
+        }
     </style>
 </head>
 <body>
     <div class="widget-container">
         <div class="widget-header">
-            <div class="widget-title" id="widgetTitle">top albums</div>
+            <div class="widget-title" id="widgetTitle">loading albums...</div>
         </div>
-        <div id="loading" class="loading"><div class="loading-spinner"></div><p>loading albums...</p></div>
+        <div id="loading" class="loading">
+            <div class="loading-spinner"></div>
+            <p id="loadingText">loading your albums...</p>
+            <p class="cold-start-message" id="coldStartMessage"></p>
+        </div>
         <div id="error" class="error" style="display: none;"></div>
         <div id="albumsGrid" class="albums-grid" style="display: none;"></div>
         <div id="noResults" class="no-results" style="display: none;">
             <strong>no albums found</strong>
-            <p id="noResultsDetail">no albums from this year</p>
+            <p id="noResultsDetail">no albums match your criteria</p>
         </div>
     </div>
 
     <script>
-        const urlParams = new URLSearchParams(window.location.search);
-        const limit = parseInt(urlParams.get('limit'));
-        const username = urlParams.get('user') || 'nikzx';
-        const year = urlParams.get('year') || new Date().getFullYear();
-        
         const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
-
-        async function loadAlbums() {
-    try {
-        const url = `${API_URL}?user=${username}&year=${year}&limit=${limit}`;
+        const params = new URLSearchParams(window.location.search);
         
-        console.log('Fetching:', url);
-        const response = await fetch(url);
+        // Parse URL parameters
+        const user = params.get('user') || 'nikzx';
+        const year = params.get('year');
+        const startYear = params.get('startYear');
+        const endYear = params.get('endYear');
+        const limit = parseInt(params.get('limit')) || 24;
         
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        // Determine widget type and construct API URL
+        let apiUrl = `${API_URL}?user=${encodeURIComponent(user)}&limit=${limit}`;
+        let widgetType = '';
+        let titleText = '';
+        
+        if (year) {
+            // Year-specific widget
+            apiUrl += `&year=${year}`;
+            widgetType = 'year';
+            titleText = `My Top ${limit} Albums of ${year}`;
+        } else if (startYear && endYear) {
+            // Date range widget (decade)
+            apiUrl += `&yearStart=${startYear}&yearEnd=${endYear}`;
+            widgetType = 'range';
+            titleText = `My Top ${limit} Albums from ${startYear}-${endYear}`;
+        } else {
+            // All-time fallback
+            widgetType = 'all';
+            titleText = `My Top ${limit} Albums`;
         }
         
-        const data = await response.json();
-        document.getElementById('loading').style.display = 'none';
+        // Track load start time for cold start detection
+        const loadStartTime = Date.now();
+        let coldStartMessageShown = false;
+        
+        // Show cold start message after 3 seconds
+        const coldStartTimer = setTimeout(() => {
+            const coldStartMsg = document.getElementById('coldStartMessage');
+            if (coldStartMsg && document.getElementById('loading').style.display !== 'none') {
+                coldStartMsg.textContent = 'server is waking up (first load may take 30 seconds)...';
+                coldStartMessageShown = true;
+            }
+        }, 3000);
+        
+        async function loadAlbums() {
+            try {
+                console.log('Fetching:', apiUrl);
+                const response = await fetch(apiUrl);
+                
+                clearTimeout(coldStartTimer);
+                const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(1);
+                console.log(`Load completed in ${loadTime}s`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                document.getElementById('loading').style.display = 'none';
 
-        if (data.albums && data.albums.length > 0) {
-            // FIX: Use the actual length of the returned array instead of the limit variable
-            const actualCount = data.albums.length;
-            const displayTitle = `My Top ${actualCount} Albums of ${year}`;
-            
-            document.getElementById('widgetTitle').textContent = displayTitle;
-            displayAlbums(data.albums);
-        } else {
-            document.getElementById('noResults').style.display = 'block';
-            document.getElementById('widgetTitle').textContent = `${year} albums`;
-        } 
+                if (data.albums && data.albums.length > 0) {
+                    const actualCount = data.albums.length;
+                    
+                    // Update title with actual count
+                    if (widgetType === 'year') {
+                        titleText = `My Top ${actualCount} Albums of ${year}`;
+                    } else if (widgetType === 'range') {
+                        titleText = `My Top ${actualCount} Albums from ${startYear}-${endYear}`;
+                    } else {
+                        titleText = `My Top ${actualCount} Albums`;
+                    }
+                    
+                    document.getElementById('widgetTitle').textContent = titleText;
+                    displayAlbums(data.albums);
+                } else {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('noResults').style.display = 'block';
+                    document.getElementById('widgetTitle').textContent = titleText;
+                    
+                    if (widgetType === 'year') {
+                        document.getElementById('noResultsDetail').textContent = `no albums from ${year}`;
+                    } else if (widgetType === 'range') {
+                        document.getElementById('noResultsDetail').textContent = `no albums from ${startYear}-${endYear}`;
+                    }
+                    
+                    sendHeight();
+                }
 
-    } catch (err) {
-        // ... (error handling remains the same)
-    }
-}
+            } catch (err) {
+                clearTimeout(coldStartTimer);
+                console.error('Error loading albums:', err);
+                
+                document.getElementById('loading').style.display = 'none';
+                const errorDiv = document.getElementById('error');
+                errorDiv.style.display = 'block';
+                errorDiv.textContent = `⚠️ ${err.message}`;
+                document.getElementById('widgetTitle').textContent = 'error loading albums';
+                
+                sendHeight();
+            }
+        }
 
         function displayAlbums(albums) {
             const grid = document.getElementById('albumsGrid');
@@ -87,12 +256,10 @@
             grid.style.display = 'grid';
             
             albums.forEach((album) => {
-                console.log('Album data:', album); // Debug log
-                
                 const card = document.createElement('div');
                 card.className = 'album-card';
                 
-                // Comprehensive field name handling
+                // Comprehensive field name handling for all response formats
                 const albumName = album.name || album.album_name || album.canonical_album || 'Unknown Album';
                 const artistName = album.artist || album.artist_name || album.canonical_artist || 'Unknown Artist';
                 const imageUrl = album.image || album.image_url || '';
@@ -100,14 +267,16 @@
                 
                 card.onclick = () => {
                     if (albumUrl !== '#') {
-                        window.open(albumUrl, '_blank');
+                        window.open(albumUrl, '_blank', 'noopener,noreferrer');
                     }
                 };
                 
                 card.innerHTML = `
-                    <img src="${imageUrl || 'https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'}" 
-                         alt="${albumName}" class="album-cover"
-                         onerror="this.src='https://via.placeholder.com/300x300/C4E0E0/4A1DC0?text=no+image'">
+                    <img src="${imageUrl || 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'}" 
+                         alt="${albumName}" 
+                         class="album-cover"
+                         onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+                         loading="lazy">
                     <div class="album-info">
                         <div class="album-name" title="${albumName}">${albumName}</div>
                         <div class="album-artist" title="${artistName}">${artistName}</div>
@@ -115,17 +284,50 @@
                 `;
                 grid.appendChild(card);
             });
-            sendHeight();
+            
+            // Send height after images load
+            const images = grid.querySelectorAll('img');
+            let loadedCount = 0;
+            
+            images.forEach(img => {
+                if (img.complete) {
+                    loadedCount++;
+                } else {
+                    img.addEventListener('load', () => {
+                        loadedCount++;
+                        if (loadedCount === images.length) {
+                            sendHeight();
+                        }
+                    });
+                }
+            });
+            
+            // Fallback: send height after short delay regardless
+            setTimeout(sendHeight, 500);
         }
 
         function sendHeight() {
-            const height = document.documentElement.scrollHeight;
-            window.parent.postMessage({ type: 'resize', height: height }, '*');
+            const height = document.documentElement.scrollHeight + 20;
+            window.parent.postMessage({ 
+                type: 'resize', 
+                height: height 
+            }, '*');
         }
 
+        // Initialize
         loadAlbums();
+        
+        // Send height on various events
         window.addEventListener('load', sendHeight);
         window.addEventListener('resize', sendHeight);
+        
+        // Observer for DOM changes
+        const observer = new MutationObserver(sendHeight);
+        observer.observe(document.body, { 
+            childList: true, 
+            subtree: true, 
+            attributes: true 
+        });
     </script>
 </body>
 </html>
