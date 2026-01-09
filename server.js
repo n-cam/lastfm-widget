@@ -156,24 +156,30 @@ async function initDatabase() {
 
 async function dbQuery(query, params = []) {
   if (dbType === 'postgres') {
+    // PostgreSQL: params should be an array
     const result = await db.query(query, params);
     return result.rows;
   }
+  // SQLite: spread the params
   return db.prepare(query).all(...params);
 }
 
 async function dbGet(query, params = []) {
   if (dbType === 'postgres') {
+    // PostgreSQL: params should be an array
     const result = await db.query(query, params);
     return result.rows[0] || null;
   }
+  // SQLite: spread the params
   return db.prepare(query).get(...params);
 }
 
 async function dbRun(query, params = []) {
   if (dbType === 'postgres') {
+    // PostgreSQL: params should be an array
     await db.query(query, params);
   } else {
+    // SQLite: spread the params
     db.prepare(query).run(...params);
   }
 }
