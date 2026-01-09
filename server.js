@@ -916,6 +916,8 @@ app.get('/api/top-albums', async (req, res) => {
   console.log(`🟢 Mode: CACHED`);
 
   try {
+    console.log('  🔍 Building query with filters:', { year, decade, yearStart, yearEnd, artist, limit });
+    
     let query = `
       SELECT 
         ag.id,
@@ -936,6 +938,8 @@ app.get('/api/top-albums', async (req, res) => {
     
     const params = [username];
     let pIdx = 2;
+    
+    console.log('  🔍 Initial params:', params.length);
 
     if (year) {
       query += ` AND ag.release_year = ${pIdx} AND ag.release_year IS NOT NULL`;
