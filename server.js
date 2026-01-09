@@ -45,7 +45,7 @@ if (process.env.DATABASE_URL) {
   db = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    max: 5,
+    max: 15, // Increased from 5
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
   });
@@ -60,7 +60,13 @@ if (process.env.DATABASE_URL) {
 
 const CACHED_USERS = (process.env.CACHED_USERS || '').split(',').filter(Boolean);
 
-// Initialize optimized database schema
+// ==========================================
+// 🆕 GLOBAL MUSICBRAINZ CACHE
+// ==========================================
+const mbGlobalCache = new Map();
+const mbFailureCache = new Map();
+
+// Initialize optimized database schema with canonical name as logical primary key
 async function initDatabase() {
   if (dbType === 'postgres') {
     await db.query(`
@@ -73,33 +79,36 @@ async function initDatabase() {
       );
 
       CREATE TABLE IF NOT EXISTS albums_global (
-        musicbrainz_id TEXT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
+        canonical_album TEXT NOT NULL,
+        canonical_artist TEXT NOT NULL,
         album_name TEXT NOT NULL,
         artist_name TEXT NOT NULL,
-        canonical_album TEXT,
-        canonical_artist TEXT,
+        musicbrainz_id TEXT,
         release_year INTEGER,
         image_url TEXT,
         lastfm_url TEXT,
         album_type TEXT,
         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(canonical_album, canonical_artist)
       );
 
       CREATE TABLE IF NOT EXISTS user_albums (
         id SERIAL PRIMARY KEY,
         username TEXT NOT NULL,
-        musicbrainz_id TEXT NOT NULL,
+        album_id INTEGER NOT NULL REFERENCES albums_global(id) ON DELETE CASCADE,
         playcount INTEGER DEFAULT 0,
         last_scrobble TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(username, musicbrainz_id)
+        UNIQUE(username, album_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
       CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
       CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
       CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_mbid ON albums_global(musicbrainz_id);
     `);
   } else {
     db.exec(`
@@ -112,33 +121,36 @@ async function initDatabase() {
       );
 
       CREATE TABLE IF NOT EXISTS albums_global (
-        musicbrainz_id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        canonical_album TEXT NOT NULL,
+        canonical_artist TEXT NOT NULL,
         album_name TEXT NOT NULL,
         artist_name TEXT NOT NULL,
-        canonical_album TEXT,
-        canonical_artist TEXT,
+        musicbrainz_id TEXT,
         release_year INTEGER,
         image_url TEXT,
         lastfm_url TEXT,
         album_type TEXT,
         first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(canonical_album, canonical_artist)
       );
 
       CREATE TABLE IF NOT EXISTS user_albums (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL,
-        musicbrainz_id TEXT NOT NULL,
+        album_id INTEGER NOT NULL REFERENCES albums_global(id) ON DELETE CASCADE,
         playcount INTEGER DEFAULT 0,
         last_scrobble TEXT,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(username, musicbrainz_id)
+        UNIQUE(username, album_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
       CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
       CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
       CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_mbid ON albums_global(musicbrainz_id);
     `);
   }
 }
@@ -167,8 +179,144 @@ async function dbRun(query, params = []) {
   }
 }
 
+// ==========================================
+// 🆕 ONE-TIME MIGRATION: Deduplicate existing data
+// ==========================================
+async function runDeduplicationMigration() {
+  console.log('\n🔄 Running deduplication migration...');
+  
+  try {
+    // Check if old schema exists
+    const hasOldSchema = await dbGet(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'albums_global' 
+        AND column_name = 'musicbrainz_id'
+        AND is_nullable = 'NO'
+    `);
+    
+    if (!hasOldSchema) {
+      console.log('✅ Already migrated or new installation');
+      return;
+    }
+
+    console.log('📊 Found old schema, starting migration...');
+    
+    // Step 1: Create new tables with correct schema
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS albums_global_new (
+        id SERIAL PRIMARY KEY,
+        canonical_album TEXT NOT NULL,
+        canonical_artist TEXT NOT NULL,
+        album_name TEXT NOT NULL,
+        artist_name TEXT NOT NULL,
+        musicbrainz_id TEXT,
+        release_year INTEGER,
+        image_url TEXT,
+        lastfm_url TEXT,
+        album_type TEXT,
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(canonical_album, canonical_artist)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_albums_new (
+        id SERIAL PRIMARY KEY,
+        username TEXT NOT NULL,
+        album_id INTEGER NOT NULL REFERENCES albums_global_new(id) ON DELETE CASCADE,
+        playcount INTEGER DEFAULT 0,
+        last_scrobble TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username, album_id)
+      );
+    `);
+
+    // Step 2: Migrate albums_global with deduplication
+    const oldAlbums = await dbQuery(`
+      SELECT DISTINCT ON (canonical_album, canonical_artist)
+        canonical_album,
+        canonical_artist,
+        album_name,
+        artist_name,
+        musicbrainz_id,
+        release_year,
+        image_url,
+        lastfm_url,
+        album_type,
+        first_seen
+      FROM albums_global
+      ORDER BY canonical_album, canonical_artist, 
+        CASE WHEN release_year IS NOT NULL THEN 0 ELSE 1 END,
+        first_seen
+    `);
+
+    console.log(`  Migrating ${oldAlbums.length} unique albums...`);
+
+    for (const album of oldAlbums) {
+      await db.query(`
+        INSERT INTO albums_global_new (
+          canonical_album, canonical_artist, album_name, artist_name,
+          musicbrainz_id, release_year, image_url, lastfm_url,
+          album_type, first_seen, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        ON CONFLICT (canonical_album, canonical_artist) DO NOTHING
+      `, [
+        album.canonical_album, album.canonical_artist, album.album_name,
+        album.artist_name, album.musicbrainz_id, album.release_year,
+        album.image_url, album.lastfm_url, album.album_type, album.first_seen
+      ]);
+    }
+
+    // Step 3: Migrate user_albums WITHOUT inflating playcounts
+    console.log('  Migrating user album data (preserving playcounts)...');
+    
+    await db.query(`
+      INSERT INTO user_albums_new (username, album_id, playcount, updated_at)
+      SELECT DISTINCT ON (ua.username, agn.id)
+        ua.username,
+        agn.id,
+        MAX(ua.playcount), -- Take highest playcount if duplicates exist
+        CURRENT_TIMESTAMP
+      FROM user_albums ua
+      JOIN albums_global ag ON ua.musicbrainz_id = ag.musicbrainz_id
+      JOIN albums_global_new agn ON 
+        ag.canonical_album = agn.canonical_album 
+        AND ag.canonical_artist = agn.canonical_artist
+      GROUP BY ua.username, agn.id
+      ON CONFLICT (username, album_id) DO NOTHING
+    `);
+
+    // Step 4: Drop old tables and rename
+    await db.query('DROP TABLE IF EXISTS user_albums CASCADE');
+    await db.query('DROP TABLE IF EXISTS albums_global CASCADE');
+    await db.query('ALTER TABLE albums_global_new RENAME TO albums_global');
+    await db.query('ALTER TABLE user_albums_new RENAME TO user_albums');
+
+    // Step 5: Recreate indexes
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
+      CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
+      CREATE INDEX IF NOT EXISTS idx_albums_global_mbid ON albums_global(musicbrainz_id);
+    `);
+
+    console.log('✅ Migration complete!');
+    
+  } catch (err) {
+    console.error('❌ Migration failed:', err);
+    console.log('Please check your database manually');
+  }
+}
+
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
+  
+  // Run migration if needed (only for Postgres, SQLite will be fresh)
+  if (dbType === 'postgres') {
+    await runDeduplicationMigration();
+  }
+  
   console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
 
   if (dbType === 'postgres') {
@@ -181,25 +329,22 @@ initDatabase().then(async () => {
   }
 });
 
-const mbCache = new Map();
-const mbFailureCache = new Map(); // ⭐ NEW: Track failed lookups
-
 const cron = require('node-cron');
 
 cron.schedule('0 3 * * 0', async () => {
-  console.log('🔄 Starting weekly auto-update...');
+  console.log('🔄 [' + new Date().toISOString() + '] Starting weekly auto-update...');
   
   for (const user of CACHED_USERS) {
     try {
-      console.log(`  Updating ${user}...`);
+      console.log(`  [${new Date().toISOString()}] Updating ${user}...`);
       await performBackgroundUpdate(user, false, 500);
       await new Promise(r => setTimeout(r, 60000));
     } catch (err) {
-      console.error(`  ❌ Failed to update ${user}:`, err);
+      console.error(`  [${new Date().toISOString()}] ❌ Failed to update ${user}:`, err);
     }
   }
   
-  console.log('✅ Weekly auto-update complete');
+  console.log('✅ [' + new Date().toISOString() + '] Weekly auto-update complete');
 });
 
 console.log('⏰ Cron job scheduled: Weekly updates every Sunday at 3am');
@@ -252,32 +397,34 @@ function stringSimilarity(str1, str2) {
   return jaccard * 0.7 + lengthRatio * 0.3;
 }
 
+// ==========================================
+// 🆕 IMPROVED: MusicBrainz lookup with global cache
+// ==========================================
 async function getMusicBrainzData(artist, album) {
-  const cacheKey = `${artist}::${album}`;
+  const cleanedAlbum = cleanAlbumName(album);
+  const cleanedArtist = cleanArtistName(artist);
+  const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
   
-  if (mbCache.has(cacheKey)) {
-    return mbCache.get(cacheKey);
+  // Check global cache first
+  if (mbGlobalCache.has(cacheKey)) {
+    return mbGlobalCache.get(cacheKey);
   }
 
-  // ⭐ NEW: Check if we recently failed this lookup
+  // Check if we recently failed this lookup
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
     if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
-      const cleanedAlbum = cleanAlbumName(album);
       return { 
-        musicbrainz_id: `fallback_${cleanedAlbum}_${artist}`, 
+        musicbrainz_id: null,
         release_year: null, 
         type: null,
         canonical_name: cleanedAlbum,
-        canonical_artist: artist
+        canonical_artist: cleanedArtist
       };
     }
   }
 
   try {
-    const cleanedAlbum = cleanAlbumName(album);
-    const cleanedArtist = cleanArtistName(artist);
-    
     const queries = [
       `release:"${album}" AND artist:"${artist}"`,
       `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`,
@@ -390,100 +537,40 @@ async function getMusicBrainzData(artist, album) {
           musicbrainz_id: best.id,
           release_year: best.year,
           type: best['primary-type'],
-          canonical_name: best.title,
-          canonical_artist: best.rgArtist
+          canonical_name: cleanAlbumName(best.title),
+          canonical_artist: cleanArtistName(best.rgArtist)
         };
         
-        mbCache.set(cacheKey, result);
-        mbFailureCache.delete(cacheKey); // ⭐ Clear failure cache on success
+        mbGlobalCache.set(cacheKey, result);
+        mbFailureCache.delete(cacheKey);
         return result;
       }
     }
     
-    // ⭐ NEW: Mark as failed
     mbFailureCache.set(cacheKey, Date.now());
     
     const noMatch = { 
-      musicbrainz_id: `fallback_${cleanAlbumName(album)}_${artist}`, 
+      musicbrainz_id: null,
       release_year: null, 
       type: null,
-      canonical_name: cleanAlbumName(album),
-      canonical_artist: artist
+      canonical_name: cleanedAlbum,
+      canonical_artist: cleanedArtist
     };
-    mbCache.set(cacheKey, noMatch);
+    mbGlobalCache.set(cacheKey, noMatch);
     return noMatch;
     
   } catch (err) {
     console.error(`MusicBrainz lookup failed for ${artist} - ${album}:`, err.message);
-    
-    // ⭐ NEW: Mark as failed
     mbFailureCache.set(cacheKey, Date.now());
     
-    const cleanedAlbum = cleanAlbumName(album);
     return { 
-      musicbrainz_id: `fallback_${cleanedAlbum}_${artist}`, 
+      musicbrainz_id: null,
       release_year: null, 
       type: null,
       canonical_name: cleanedAlbum,
-      canonical_artist: artist
+      canonical_artist: cleanedArtist
     };
   }
-}
-
-// ⭐ NEW: Helper function to find existing albums
-async function findExistingAlbum(canonicalAlbum, canonicalArtist) {
-  const existing = await dbGet(`
-    SELECT musicbrainz_id, release_year
-    FROM albums_global
-    WHERE canonical_album = $1 
-      AND canonical_artist = $2
-    ORDER BY 
-      CASE 
-        WHEN release_year IS NOT NULL THEN 0 
-        ELSE 1 
-      END,
-      musicbrainz_id
-    LIMIT 1
-  `, [canonicalAlbum, canonicalArtist]);
-  
-  return existing;
-}
-
-// ⭐ NEW: Merge fallback entries into canonical entries
-async function mergeIntoCanonical(fallbackId, canonicalId) {
-  console.log(`  🔄 Merging ${fallbackId} → ${canonicalId}`);
-  
-  if (dbType === 'postgres') {
-    await db.query(`
-      INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
-      SELECT username, $2, playcount, CURRENT_TIMESTAMP
-      FROM user_albums
-      WHERE musicbrainz_id = $1
-      ON CONFLICT (username, musicbrainz_id)
-      DO UPDATE SET 
-        playcount = user_albums.playcount + EXCLUDED.playcount,
-        updated_at = CURRENT_TIMESTAMP
-    `, [fallbackId, canonicalId]);
-  } else {
-    const userEntries = await dbQuery(
-      'SELECT username, playcount FROM user_albums WHERE musicbrainz_id = ?',
-      [fallbackId]
-    );
-    
-    for (const entry of userEntries) {
-      await dbRun(`
-        INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(username, musicbrainz_id) 
-        DO UPDATE SET 
-          playcount = playcount + excluded.playcount,
-          updated_at = CURRENT_TIMESTAMP
-      `, [entry.username, canonicalId, entry.playcount]);
-    }
-  }
-  
-  await dbRun('DELETE FROM user_albums WHERE musicbrainz_id = $1', [fallbackId]);
-  await dbRun('DELETE FROM albums_global WHERE musicbrainz_id = $1', [fallbackId]);
 }
 
 async function fetchAllAlbums(username, totalLimit) {
@@ -538,10 +625,12 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
-// ⭐ UPDATED: performBackgroundUpdate with duplicate prevention
+// ==========================================
+// 🆕 IMPROVED: Background update with canonical name logic
+// ==========================================
 async function performBackgroundUpdate(username, full, limit) {
   const processStart = Date.now();
-  console.log(`🚀 BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
+  console.log(`🚀 [${new Date().toISOString()}] BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
 
   try {
     await dbRun(
@@ -552,10 +641,9 @@ async function performBackgroundUpdate(username, full, limit) {
     const perPage = 50; 
     const pages = Math.ceil(limit / perPage);
     let totalUpdated = 0;
-    let mergedCount = 0;
 
     for (let page = 1; page <= pages; page++) {
-      console.log(`\n📄 BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
+      console.log(`\n📄 [${new Date().toISOString()}] BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
       const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
       
       let pageData;
@@ -615,91 +703,113 @@ async function performBackgroundUpdate(username, full, limit) {
         try {
           const mbData = await getMusicBrainzData(a.artist.name, a.name);
           
-          // ⭐ NEW: Check if this album already exists by canonical name
-          const existing = await findExistingAlbum(
-            mbData.canonical_name, 
-            mbData.canonical_artist
-          );
-          
-          let finalMbId = mbData.musicbrainz_id;
-          
-          if (existing) {
-            if (existing.release_year && !mbData.release_year) {
-              // Existing has year, new doesn't → use existing
-              finalMbId = existing.musicbrainz_id;
-              if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
-                await mergeIntoCanonical(mbData.musicbrainz_id, existing.musicbrainz_id);
-                mergedCount++;
-              }
-              
-            } else if (!existing.release_year && mbData.release_year) {
-              // New has year, existing doesn't → upgrade
-              finalMbId = mbData.musicbrainz_id;
-              
-              if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
-                await mergeIntoCanonical(existing.musicbrainz_id, mbData.musicbrainz_id);
-                mergedCount++;
-              }
-              
-            } else if (existing.musicbrainz_id !== mbData.musicbrainz_id) {
-              const existingIsFallback = existing.musicbrainz_id.startsWith('fallback_');
-              const newIsFallback = mbData.musicbrainz_id.startsWith('fallback_');
-              
-              if (existingIsFallback && !newIsFallback) {
-                finalMbId = mbData.musicbrainz_id;
-                await mergeIntoCanonical(existing.musicbrainz_id, mbData.musicbrainz_id);
-                mergedCount++;
-              } else {
-                finalMbId = existing.musicbrainz_id;
-              }
+          // Upsert album by canonical name
+          let albumId;
+          if (dbType === 'postgres') {
+            const result = await db.query(`
+              INSERT INTO albums_global (
+                canonical_album, canonical_artist, album_name, artist_name,
+                musicbrainz_id, release_year, image_url, lastfm_url, album_type, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+              ON CONFLICT (canonical_album, canonical_artist) 
+              DO UPDATE SET 
+                album_name = EXCLUDED.album_name,
+                artist_name = EXCLUDED.artist_name,
+                musicbrainz_id = COALESCE(EXCLUDED.musicbrainz_id, albums_global.musicbrainz_id),
+                release_year = COALESCE(EXCLUDED.release_year, albums_global.release_year),
+                image_url = EXCLUDED.image_url,
+                lastfm_url = EXCLUDED.lastfm_url,
+                album_type = COALESCE(EXCLUDED.album_type, albums_global.album_type),
+                updated_at = CURRENT_TIMESTAMP
+              RETURNING id
+            `, [
+              mbData.canonical_name,
+              mbData.canonical_artist,
+              a.name,
+              a.artist.name,
+              mbData.musicbrainz_id,
+              mbData.release_year,
+              a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+              a.url,
+              mbData.type
+            ]);
+            albumId = result.rows[0].id;
+          } else {
+            const existing = await dbGet(
+              'SELECT id FROM albums_global WHERE canonical_album = ? AND canonical_artist = ?',
+              [mbData.canonical_name, mbData.canonical_artist]
+            );
+
+            if (existing) {
+              await dbRun(`
+                UPDATE albums_global SET
+                  album_name = ?,
+                  artist_name = ?,
+                  musicbrainz_id = COALESCE(?, musicbrainz_id),
+                  release_year = COALESCE(?, release_year),
+                  image_url = ?,
+                  lastfm_url = ?,
+                  album_type = COALESCE(?, album_type),
+                  updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+              `, [
+                a.name,
+                a.artist.name,
+                mbData.musicbrainz_id,
+                mbData.release_year,
+                a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+                a.url,
+                mbData.type,
+                existing.id
+              ]);
+              albumId = existing.id;
             } else {
-              finalMbId = existing.musicbrainz_id;
+              const info = db.prepare(`
+                INSERT INTO albums_global (
+                  canonical_album, canonical_artist, album_name, artist_name,
+                  musicbrainz_id, release_year, image_url, lastfm_url, album_type, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              `).run(
+                mbData.canonical_name,
+                mbData.canonical_artist,
+                a.name,
+                a.artist.name,
+                mbData.musicbrainz_id,
+                mbData.release_year,
+                a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+                a.url,
+                mbData.type
+              );
+              albumId = info.lastInsertRowid;
             }
           }
-          
-          await dbRun(`
-            INSERT INTO albums_global (
-              musicbrainz_id, album_name, artist_name, 
-              canonical_album, canonical_artist, release_year,
-              image_url, lastfm_url, album_type, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-            ON CONFLICT(musicbrainz_id) 
-            DO UPDATE SET 
-              album_name = EXCLUDED.album_name,
-              artist_name = EXCLUDED.artist_name,
-              canonical_album = EXCLUDED.canonical_album,
-              canonical_artist = EXCLUDED.canonical_artist,
-              release_year = COALESCE(EXCLUDED.release_year, albums_global.release_year),
-              image_url = EXCLUDED.image_url,
-              lastfm_url = EXCLUDED.lastfm_url,
-              album_type = EXCLUDED.album_type,
-              updated_at = CURRENT_TIMESTAMP
-          `, [
-            finalMbId, 
-            a.name, 
-            a.artist.name, 
-            mbData.canonical_name, 
-            mbData.canonical_artist, 
-            mbData.release_year, 
-            a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-            a.url, 
-            mbData.type
-          ]);
 
-          await dbRun(`
-            INSERT INTO user_albums (username, musicbrainz_id, playcount, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-            ON CONFLICT(username, musicbrainz_id) 
-            DO UPDATE SET 
-              playcount = EXCLUDED.playcount, 
-              updated_at = CURRENT_TIMESTAMP
-          `, [username, finalMbId, parseInt(a.playcount)]);
+          // Upsert user album data
+          if (dbType === 'postgres') {
+            await db.query(`
+              INSERT INTO user_albums (username, album_id, playcount, updated_at)
+              VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+              ON CONFLICT(username, album_id) 
+              DO UPDATE SET 
+                playcount = EXCLUDED.playcount, 
+                updated_at = CURRENT_TIMESTAMP
+            `, [username, albumId, parseInt(a.playcount)]);
+          } else {
+            await dbRun(`
+              INSERT INTO user_albums (username, album_id, playcount, updated_at)
+              VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(username, album_id) 
+              DO UPDATE SET 
+                playcount = excluded.playcount, 
+                updated_at = CURRENT_TIMESTAMP
+            `, [username, albumId, parseInt(a.playcount)]);
+          }
           
           totalUpdated++;
-          if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums (merged ${mergedCount})`);
+          if (totalUpdated % 10 === 0) console.log(`  ... processed ${totalUpdated} albums`);
 
         } catch (innerErr) {
-          console.error(`  ⚠️ Skipped album: ${a.name}`);
+          console.error(`  ⚠️ Skipped album: ${a.name} - ${innerErr.message}`);
         }
       }
 
@@ -715,10 +825,10 @@ async function performBackgroundUpdate(username, full, limit) {
     await dbRun(updateQuery, [username]);
     
     const duration = ((Date.now() - processStart) / 1000).toFixed(1);
-    console.log(`✅ BACKGROUND: Finished ${username}. Updated ${totalUpdated} albums, merged ${mergedCount} duplicates in ${duration}s`);
+    console.log(`✅ [${new Date().toISOString()}] BACKGROUND: Finished ${username}. Updated ${totalUpdated} albums in ${duration}s`);
 
   } catch (err) {
-    console.error(`❌ BACKGROUND ERROR for ${username}:`, err);
+    console.error(`❌ [${new Date().toISOString()}] BACKGROUND ERROR for ${username}:`, err);
   }
 }
 
@@ -751,6 +861,18 @@ const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 50,
   message: { error: 'Too many requests, please try again later' }
+});
+
+// ==========================================
+// 🆕 WARMUP ENDPOINT
+// ==========================================
+app.get('/warmup', async (req, res) => {
+  try {
+    await dbGet('SELECT 1');
+    res.json({ status: 'warmed up', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'warmup failed' });
+  }
 });
 
 app.get('/health', (req, res) => {
@@ -971,66 +1093,56 @@ app.get('/api/top-albums', async (req, res) => {
     }
     return;
   }
-  
-  // ... (Previous code: "return;" from the real-time block)
 
   console.log(`🟢 Mode: CACHED`);
 
   try {
-    // 1. Base Query with $1 placeholder for username
     let query = `
       SELECT 
-        ag.musicbrainz_id,
-        ag.album_name,
-        ag.artist_name,
+        ag.id,
         ag.canonical_album,
         ag.canonical_artist,
+        ag.album_name,
+        ag.artist_name,
+        ag.musicbrainz_id,
         ag.release_year,
         ag.image_url,
         ag.lastfm_url,
         ag.album_type,
         ua.playcount
       FROM user_albums ua
-      JOIN albums_global ag ON ua.musicbrainz_id = ag.musicbrainz_id
+      JOIN albums_global ag ON ua.album_id = ag.id
       WHERE ua.username = $1
     `;
     
-    // 2. Initialize params array with username
     const params = [username];
-    let pIdx = 2; // Start counting extra params from $2
+    let pIdx = 2;
 
-    // 3. Add Year or Decade Filters using $ placeholders
     if (year) {
-      query += ` AND ag.release_year = $${pIdx} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year = ${pIdx} AND ag.release_year IS NOT NULL`;
       params.push(year);
       pIdx++;
     } 
     else if (decade || (yearStart && yearEnd)) {
-      // Handle both "decade" param and "yearStart/End" param
       const start = decade || yearStart;
       const end = decade ? (decade + 9) : yearEnd;
       
-      query += ` AND ag.release_year BETWEEN $${pIdx} AND $${pIdx + 1} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year BETWEEN ${pIdx} AND ${pIdx + 1} AND ag.release_year IS NOT NULL`;
       params.push(start, end);
       pIdx += 2;
     }
 
-    // 4. Add Artist Filter
     if (artist) {
-      query += ` AND (LOWER(ag.artist_name) LIKE $${pIdx} OR LOWER(ag.canonical_artist) LIKE $${pIdx + 1})`;
+      query += ` AND (LOWER(ag.artist_name) LIKE ${pIdx} OR LOWER(ag.canonical_artist) LIKE ${pIdx + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
       pIdx += 2;
     }
 
-    // 5. Add Sorting and LIMIT
-    // IMPORTANT: We must use the $ symbol for the limit parameter too
-    query += ` ORDER BY ua.playcount DESC LIMIT $${pIdx}`;
+    query += ` ORDER BY ua.playcount DESC LIMIT ${pIdx}`;
     params.push(limit);
 
-    // 6. Execute Query
     const albums = await dbQuery(query, params);
     
-    // Check if user exists to prevent empty cache confusion
     const userEntry = await dbGet('SELECT * FROM users WHERE username = $1', [username]);
 
     if (!userEntry) {
@@ -1117,11 +1229,11 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = $${paramIndex}`;
+      query += ` WHERE release_year = ${paramIndex}`;
       params.push(year);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex + (year ? 1 : 0)}`;
+    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex + (year ? 1 : 0)}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);

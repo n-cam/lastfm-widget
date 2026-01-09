@@ -150,39 +150,32 @@
         const API_URL = 'https://lastfm-widget.onrender.com/api/top-albums';
         const params = new URLSearchParams(window.location.search);
         
-        // Parse URL parameters
         const user = params.get('user') || 'nikzx';
         const year = params.get('year');
         const startYear = params.get('startYear');
         const endYear = params.get('endYear');
         const limit = parseInt(params.get('limit')) || 24;
         
-        // Determine widget type and construct API URL
         let apiUrl = `${API_URL}?user=${encodeURIComponent(user)}&limit=${limit}`;
         let widgetType = '';
         let titleText = '';
         
         if (year) {
-            // Year-specific widget
             apiUrl += `&year=${year}`;
             widgetType = 'year';
             titleText = `My Top ${limit} Albums of ${year}`;
         } else if (startYear && endYear) {
-            // Date range widget (decade)
             apiUrl += `&yearStart=${startYear}&yearEnd=${endYear}`;
             widgetType = 'range';
             titleText = `My Top ${limit} Albums from ${startYear}-${endYear}`;
         } else {
-            // All-time fallback
             widgetType = 'all';
             titleText = `My Top ${limit} Albums`;
         }
         
-        // Track load start time for cold start detection
         const loadStartTime = Date.now();
         let coldStartMessageShown = false;
         
-        // Show cold start message after 3 seconds
         const coldStartTimer = setTimeout(() => {
             const coldStartMsg = document.getElementById('coldStartMessage');
             if (coldStartMsg && document.getElementById('loading').style.display !== 'none') {
@@ -211,7 +204,6 @@
                 if (data.albums && data.albums.length > 0) {
                     const actualCount = data.albums.length;
                     
-                    // Update title with actual count
                     if (widgetType === 'year') {
                         titleText = `My Top ${actualCount} Albums of ${year}`;
                     } else if (widgetType === 'range') {
@@ -259,7 +251,6 @@
                 const card = document.createElement('div');
                 card.className = 'album-card';
                 
-                // Comprehensive field name handling for all response formats
                 const albumName = album.name || album.album_name || album.canonical_album || 'Unknown Album';
                 const artistName = album.artist || album.artist_name || album.canonical_artist || 'Unknown Artist';
                 const imageUrl = album.image || album.image_url || '';
@@ -285,7 +276,6 @@
                 grid.appendChild(card);
             });
             
-            // Send height after images load
             const images = grid.querySelectorAll('img');
             let loadedCount = 0;
             
@@ -302,11 +292,8 @@
                 }
             });
             
-            // Fallback: send height after short delay regardless
             setTimeout(sendHeight, 500);
         }
-
-       // ... (keep your loadAlbums and displayAlbums functions as they are) ...
 
         let lastSentHeight = 0;
 
@@ -314,13 +301,10 @@
             const container = document.querySelector('.widget-container');
             if (!container) return;
 
-            // Measure the container explicitly rather than the whole document
-            // We add 30px to account for the body padding (10px) + safety buffer
             const newHeight = container.getBoundingClientRect().height + 30;
             
-            // STOP THE LOOP: Only send message if height changed by more than 2 pixels
             if (Math.abs(newHeight - lastSentHeight) > 2) {
-                console.log(`Resize: ${lastSentHeight} -> ${newHeight}`); // Debug log
+                console.log(`Resize: ${lastSentHeight} -> ${newHeight}`);
                 lastSentHeight = newHeight;
                 
                 window.parent.postMessage({ 
@@ -330,31 +314,30 @@
             }
         }
 
-        // Initialize
         loadAlbums();
         
-        // Use a Debounce for the resize event to prevent rapid-fire updates
         let resizeTimeout;
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(sendHeight, 100);
         });
         
-        // Keep the MutationObserver, it's good for dynamic content loading
         const observer = new MutationObserver((mutations) => {
-            // Check if actual nodes were added/removed or style changed significantly
             const shouldUpdate = mutations.some(m => 
                 m.type === 'childList' || 
                 (m.type === 'attributes' && m.attributeName === 'style')
             );
-            if (shouldUpdate) sendHeight();
+            if (shouldUpdate) {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(sendHeight, 50);
+            }
         });
         
         observer.observe(document.body, { 
             childList: true, 
             subtree: true, 
             attributes: true,
-            attributeFilter: ['style', 'class'] // Filter to reduce noise
+            attributeFilter: ['style', 'class']
         });
     </script>
 </body>

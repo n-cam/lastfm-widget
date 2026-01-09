@@ -559,7 +559,7 @@
 <body>
     <div class="container">
         <div class="section">
-            <div class="section-title">⚙️ search settings</div>
+            <div class="section-title">⚙️ Search Settings</div>
             
             <form id="searchForm">
                 <div class="form-section">
@@ -646,7 +646,7 @@
                     </div>
                 </div>
 
-                <button type="submit" id="submitBtn">🔍 get top albums</button>
+                <button type="submit" id="submitBtn">🔍 Get Top Albums</button>
             </form>
         </div>
 
@@ -701,7 +701,7 @@
 
                 <div class="download-section">
                     <button class="btn download-btn" id="downloadBtn">
-                        📸 download <span id="downloadType">cards</span>
+                        📸 Download <span id="downloadType">Cards</span>
                     </button>
                 </div>
             </div>
@@ -967,7 +967,7 @@
                 alert('Failed to generate image. Please try again.');
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = `📸 download <span id="downloadType">${currentView === 'card' ? 'cards' : 'collage'}</span>`;
+                btn.innerHTML = `📸 Download <span id="downloadType">${currentView === 'Card' ? 'Cards' : 'collage'}</span>`;
             }
         });
 
