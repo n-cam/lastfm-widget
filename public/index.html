@@ -355,8 +355,9 @@
         /* Albums Grid - Card View */
         .albums-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 20px;
+            padding: 0 20px;
         }
 
         .album-card {
@@ -574,10 +575,10 @@
                 <div class="form-section">
                     <label>Filter By:</label>
                     <div class="filter-tabs">
-                        <div class="tab active" data-filter="year">specific year</div>
-                        <div class="tab" data-filter="decade">decade</div>
-                        <div class="tab" data-filter="range">date range</div>
-                        <div class="tab" data-filter="all">all time</div>
+                        <div class="tab active" data-filter="year">Specific Year</div>
+                        <div class="tab" data-filter="decade">Decade</div>
+                        <div class="tab" data-filter="range">Date Range</div>
+                        <div class="tab" data-filter="all">All Time</div>
                     </div>
                 </div>
 
@@ -692,8 +693,8 @@
                 </div>
 
                 <div class="view-toggle">
-                    <button class="view-btn active" data-view="card">📱 card view</button>
-                    <button class="view-btn" data-view="collage">🎨 collage view</button>
+                    <button class="view-btn active" data-view="card">🃏 card view</button>
+                    <button class="view-btn" data-view="collage">🖼️ collage view</button>
                 </div>
 
                 <div id="albumsGrid" class="albums-grid"></div>
@@ -974,21 +975,56 @@
         async function downloadCardView() {
             const grid = document.getElementById('albumsGrid');
             const username = document.getElementById('username').value.trim();
+            const count = currentAlbums.length;
             
-            // Use html2canvas to capture the grid
-            const canvas = await html2canvas(grid, {
-                backgroundColor: '#ffffff',
-                scale: 2, // Higher quality
-                logging: false,
-                useCORS: true
-            });
-
+            // Create a wrapper div with title and grid
+            const wrapper = document.createElement('div');
+            wrapper.style.backgroundColor = '#C4E0E0';
+            wrapper.style.padding = '40px';
+            wrapper.style.fontFamily = '"Martian Mono", monospace';
+            
+            // Add title
+            const title = document.createElement('div');
+            title.style.textAlign = 'center';
+            title.style.marginBottom = '30px';
+            title.innerHTML = `
+                <div style="font-size: 48px; font-weight: 700; color: #4A1DC0; margin-bottom: 10px;">
+                    My Top ${count} Albums of ${currentFilter}
+                </div>
+            `;
+            wrapper.appendChild(title);
+            
+            // Clone the grid
+            const gridClone = grid.cloneNode(true);
+            gridClone.style.backgroundColor = 'transparent';
+            wrapper.appendChild(gridClone);
+            
             // Add watermark
-            const ctx = canvas.getContext('2d');
-            ctx.font = 'bold 24px "Martian Mono"';
-            ctx.fillStyle = '#4A1DC0';
-            ctx.textAlign = 'right';
-            ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width - 20, canvas.height - 20);
+            const watermark = document.createElement('div');
+            watermark.style.textAlign = 'center';
+            watermark.style.marginTop = '30px';
+            watermark.style.fontSize = '20px';
+            watermark.style.color = '#4A1DC0';
+            watermark.textContent = 'sortedsongs.com/tools/album-explorer';
+            wrapper.appendChild(watermark);
+            
+            // Temporarily add to document
+            wrapper.style.position = 'absolute';
+            wrapper.style.left = '-9999px';
+            document.body.appendChild(wrapper);
+            
+            // Use html2canvas to capture the wrapper
+            const canvas = await html2canvas(wrapper, {
+                backgroundColor: '#C4E0E0',
+                scale: 2,
+                logging: false,
+                useCORS: true,
+                width: wrapper.offsetWidth,
+                height: wrapper.offsetHeight
+            });
+            
+            // Remove wrapper
+            document.body.removeChild(wrapper);
 
             // Download
             downloadCanvas(canvas, `${username}_cards_${currentFilter.replace(/\s+/g, '_')}.png`);
@@ -1024,7 +1060,7 @@
             const ctx = canvas.getContext('2d');
 
             // Background
-            ctx.fillStyle = '#ffffff';
+            ctx.fillStyle = '#C4E0E0';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             // Header text
@@ -1058,9 +1094,9 @@
                         const x = col * albumSize;
                         const y = row * albumSize + headerHeight;
                         
-                        ctx.fillStyle = '#C4E0E0';
-                        ctx.fillRect(x, y, albumSize, albumSize);
                         ctx.fillStyle = '#4A1DC0';
+                        ctx.fillRect(x, y, albumSize, albumSize);
+                        ctx.fillStyle = '#C4E0E0';
                         ctx.font = '24px "Martian Mono"';
                         ctx.textAlign = 'center';
                         ctx.fillText('No Image', x + albumSize / 2, y + albumSize / 2);
