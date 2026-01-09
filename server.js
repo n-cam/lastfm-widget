@@ -1072,6 +1072,20 @@ app.get('/api/albums/all', async (req, res) => {
   }
 });
 
+app.get('/api/proxy-image', async (req, res) => {
+  const imageUrl = req.query.url;
+  if (!imageUrl) return res.status(400).send('No URL provided');
+  try {
+    const response = await fetch(imageUrl);
+    const buffer = await response.buffer();
+    res.set('Content-Type', response.headers.get('content-type'));
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send('Proxy error');
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n🎵 Last.fm Top Albums API Server`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);

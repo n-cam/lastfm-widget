@@ -720,455 +720,456 @@
     </div>
 
     <script>
-        const API_URL = '/api/top-albums';
-        const STATS_URL = '/api/cache/stats';
+    const API_URL = '/api/top-albums';
+    const STATS_URL = '/api/cache/stats';
 
-        let currentAlbums = [];
-        let currentSort = 'playcount';
-        let currentView = 'card';
-        let currentFilter = '';
+    let currentAlbums = [];
+    let currentSort = 'playcount';
+    let currentView = 'card';
+    let currentFilter = '';
 
-        // Filter tabs
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
+    // Filter tabs
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
 
-                document.querySelectorAll('.filter-section').forEach(s => s.classList.remove('active'));
-                const filterId = tab.dataset.filter + 'Filter';
-                const filterSection = document.getElementById(filterId);
-                if (filterSection) filterSection.classList.add('active');
-            });
+            document.querySelectorAll('.filter-section').forEach(s => s.classList.remove('active'));
+            const filterId = tab.dataset.filter + 'Filter';
+            const filterSection = document.getElementById(filterId);
+            if (filterSection) filterSection.classList.add('active');
         });
+    });
 
-        // View toggle
-        document.querySelectorAll('.view-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                
-                currentView = btn.dataset.view;
-                
-                if (currentView === 'collage') {
-                    document.body.classList.add('collage-view');
-                    document.getElementById('downloadType').textContent = 'collage';
-                } else {
-                    document.body.classList.remove('collage-view');
-                    document.getElementById('downloadType').textContent = 'cards';
-                }
-            });
-        });
-
-        // Form submit
-        document.getElementById('searchForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const username = document.getElementById('username').value.trim();
-            const activeFilter = document.querySelector('.tab.active').dataset.filter;
-            const limit = document.getElementById('limit').value;
-
-            let url = `${API_URL}?user=${encodeURIComponent(username)}&limit=${limit}`;
-            let filterText = 'all time';
-
-            if (activeFilter === 'year') {
-                const year = document.getElementById('year').value;
-                if (year) {
-                    url += `&year=${year}`;
-                    filterText = year;
-                }
-            } else if (activeFilter === 'decade') {
-                const decade = document.getElementById('decade').value;
-                if (decade) {
-                    url += `&decade=${decade}`;
-                    filterText = `${decade}s`;
-                }
-            } else if (activeFilter === 'range') {
-                const yearStart = document.getElementById('yearStart').value;
-                const yearEnd = document.getElementById('yearEnd').value;
-                if (yearStart && yearEnd) {
-                    url += `&yearStart=${yearStart}&yearEnd=${yearEnd}`;
-                    filterText = `${yearStart}–${yearEnd}`;
-                }
-            }
-
-            currentFilter = filterText;
-
-            hideAll();
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('submitBtn').disabled = true;
+    // View toggle
+    document.querySelectorAll('.view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
             
-            if (activeFilter !== 'all') {
-                document.getElementById('loadingMessage').textContent = 'scanning your top 500 albums...';
-                document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~3-8 minutes)';
+            currentView = btn.dataset.view;
+            
+            if (currentView === 'collage') {
+                document.body.classList.add('collage-view');
+                document.getElementById('downloadType').textContent = 'collage';
             } else {
-                document.getElementById('loadingMessage').textContent = 'fetching your albums...';
-                document.getElementById('loadingDetail').textContent = 'this will take 1-2 minutes';
-            }
-
-            try {
-                await fetchStats(username);
-
-                const response = await fetch(url);
-                
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
-                }
-
-                const data = await response.json();
-
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('submitBtn').disabled = false;
-
-                let albums = data.albums;
-                if (activeFilter === 'range') {
-                    const yearStart = parseInt(document.getElementById('yearStart').value);
-                    const yearEnd = parseInt(document.getElementById('yearEnd').value);
-                    albums = albums.filter(a => 
-                        a.release_year && 
-                        a.release_year >= yearStart && 
-                        a.release_year <= yearEnd
-                    );
-                }
-
-                if (albums && albums.length > 0) {
-                    currentAlbums = albums;
-                    displayResults(username, filterText, albums.length);
-                    sortAndDisplayAlbums();
-                } else {
-                    document.getElementById('noResults').style.display = 'block';
-                }
-
-            } catch (err) {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('submitBtn').disabled = false;
-                showError(err.message);
+                document.body.classList.remove('collage-view');
+                document.getElementById('downloadType').textContent = 'cards';
             }
         });
+    });
 
-        async function fetchStats(username) {
-            try {
-                const response = await fetch(`${STATS_URL}?user=${username}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    if (data.mode === 'realtime') {
-                        console.log('User is in real-time mode (no cache)');
-                        document.getElementById('statsCard').style.display = 'none';
-                        return;
-                    }
-                    
-                    updateStatsCard(data);
-                } else {
-                    console.log('Could not fetch stats, continuing anyway');
+    // Form submit
+    document.getElementById('searchForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const username = document.getElementById('username').value.trim();
+        const activeFilter = document.querySelector('.tab.active').dataset.filter;
+        const limit = document.getElementById('limit').value;
+
+        let url = `${API_URL}?user=${encodeURIComponent(username)}&limit=${limit}`;
+        let filterText = 'all time';
+
+        if (activeFilter === 'year') {
+            const year = document.getElementById('year').value;
+            if (year) {
+                url += `&year=${year}`;
+                filterText = year;
+            }
+        } else if (activeFilter === 'decade') {
+            const decade = document.getElementById('decade').value;
+            if (decade) {
+                url += `&decade=${decade}`;
+                filterText = `${decade}s`;
+            }
+        } else if (activeFilter === 'range') {
+            const yearStart = document.getElementById('yearStart').value;
+            const yearEnd = document.getElementById('yearEnd').value;
+            if (yearStart && yearEnd) {
+                url += `&yearStart=${yearStart}&yearEnd=${yearEnd}`;
+                filterText = `${yearStart}–${yearEnd}`;
+            }
+        }
+
+        currentFilter = filterText;
+
+        hideAll();
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('submitBtn').disabled = true;
+        
+        if (activeFilter !== 'all') {
+            document.getElementById('loadingMessage').textContent = 'scanning your top 500 albums...';
+            document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~3-8 minutes)';
+        } else {
+            document.getElementById('loadingMessage').textContent = 'fetching your albums...';
+            document.getElementById('loadingDetail').textContent = 'this will take 1-2 minutes';
+        }
+
+        try {
+            await fetchStats(username);
+
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
+            }
+
+            const data = await response.json();
+
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('submitBtn').disabled = false;
+
+            let albums = data.albums;
+            if (activeFilter === 'range') {
+                const yearStart = parseInt(document.getElementById('yearStart').value);
+                const yearEnd = parseInt(document.getElementById('yearEnd').value);
+                albums = albums.filter(a => 
+                    a.release_year && 
+                    a.release_year >= yearStart && 
+                    a.release_year <= yearEnd
+                );
+            }
+
+            if (albums && albums.length > 0) {
+                currentAlbums = albums;
+                displayResults(username, filterText, albums.length);
+                sortAndDisplayAlbums();
+            } else {
+                document.getElementById('noResults').style.display = 'block';
+            }
+
+        } catch (err) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('submitBtn').disabled = false;
+            showError(err.message);
+        }
+    });
+
+    async function fetchStats(username) {
+        try {
+            const response = await fetch(`${STATS_URL}?user=${username}`);
+            if (response.ok) {
+                const data = await response.json();
+                
+                if (data.mode === 'realtime') {
+                    console.log('User is in real-time mode (no cache)');
                     document.getElementById('statsCard').style.display = 'none';
+                    return;
                 }
-            } catch (err) {
-                console.error('failed to fetch stats:', err);
+                
+                updateStatsCard(data);
+            } else {
+                console.log('Could not fetch stats, continuing anyway');
                 document.getElementById('statsCard').style.display = 'none';
             }
+        } catch (err) {
+            console.error('failed to fetch stats:', err);
+            document.getElementById('statsCard').style.display = 'none';
         }
+    }
 
-        function updateStatsCard(data) {
-            document.getElementById('totalAlbums').textContent = data.total_albums || 0;
+    function updateStatsCard(data) {
+        document.getElementById('totalAlbums').textContent = data.total_albums || 0;
+        
+        if (data.last_update_recent) {
+            const date = new Date(data.last_update_recent);
+            document.getElementById('lastUpdate').textContent = date.toLocaleDateString();
             
-            if (data.last_update_recent) {
-                const date = new Date(data.last_update_recent);
-                document.getElementById('lastUpdate').textContent = date.toLocaleDateString();
-                
-                const hours = Math.round((Date.now() - date.getTime()) / 1000 / 60 / 60);
-                document.getElementById('cacheAge').textContent = hours;
-            } else {
-                document.getElementById('lastUpdate').textContent = 'never';
-                document.getElementById('cacheAge').textContent = '∞';
-            }
-
-            document.getElementById('statsCard').style.display = 'block';
+            const hours = Math.round((Date.now() - date.getTime()) / 1000 / 60 / 60);
+            document.getElementById('cacheAge').textContent = hours;
+        } else {
+            document.getElementById('lastUpdate').textContent = 'never';
+            document.getElementById('cacheAge').textContent = '∞';
         }
 
-        document.querySelectorAll('.sort-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                
-                currentSort = btn.dataset.sort;
-                sortAndDisplayAlbums();
-            });
+        document.getElementById('statsCard').style.display = 'block';
+    }
+
+    document.querySelectorAll('.sort-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            currentSort = btn.dataset.sort;
+            sortAndDisplayAlbums();
         });
+    });
 
-        function sortAndDisplayAlbums() {
-            let sorted = [...currentAlbums];
-            
-            if (currentSort === 'playcount') {
-                sorted.sort((a, b) => b.playcount - a.playcount);
-            } else if (currentSort === 'year') {
-                sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
-            } else if (currentSort === 'name') {
-                sorted.sort((a, b) => a.name.localeCompare(b.name));
-            }
-
-            displayAlbumCards(sorted);
+    function sortAndDisplayAlbums() {
+        let sorted = [...currentAlbums];
+        
+        if (currentSort === 'playcount') {
+            sorted.sort((a, b) => b.playcount - a.playcount);
+        } else if (currentSort === 'year') {
+            sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
+        } else if (currentSort === 'name') {
+            sorted.sort((a, b) => a.name.localeCompare(b.name));
         }
 
-        function displayResults(username, filterText, count) {
-            document.getElementById('resultsTitle').textContent = `🎵 ${username}'s top albums`;
-            document.getElementById('resultsSubtitle').textContent = `${filterText} • ${count} album${count !== 1 ? 's' : ''}`;
-            document.getElementById('results').style.display = 'block';
-        }
+        displayAlbumCards(sorted);
+    }
 
-        function displayAlbumCards(albums) {
-            const grid = document.getElementById('albumsGrid');
-            grid.innerHTML = '';
+    function displayResults(username, filterText, count) {
+        document.getElementById('resultsTitle').textContent = `🎵 ${username}'s top albums`;
+        document.getElementById('resultsSubtitle').textContent = `${filterText} • ${count} album${count !== 1 ? 's' : ''}`;
+        document.getElementById('results').style.display = 'block';
+    }
 
-            albums.forEach((album, index) => {
-                const card = document.createElement('div');
-                card.className = 'album-card';
-                card.onclick = () => window.open(album.url, '_blank');
+    function displayAlbumCards(albums) {
+        const grid = document.getElementById('albumsGrid');
+        grid.innerHTML = '';
 
-                const imageUrl = (album.image && album.image.trim()) || 
-                 (album.image_url && album.image_url.trim()) || 
-                 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+        albums.forEach((album, index) => {
+            const card = document.createElement('div');
+            card.className = 'album-card';
+            card.onclick = () => window.open(album.url, '_blank');
 
-                card.innerHTML = `
-                    <img 
-                        src="${imageUrl}" 
-                        alt="${album.name}"
-                        class="album-cover"
-                        crossorigin="anonymous" 
-                        onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
-                    >
-                    <div class="album-info">
-                        <div class="album-name" title="${album.name}">${album.name}</div>
-                        <div class="album-artist" title="${album.artist}">${album.artist}</div>
-                        <div class="album-meta">
-                            <span class="album-rank">#${index + 1}</span>
-                            <span class="album-playcount">${album.playcount.toLocaleString()}</span>
-                            <span class="album-year">${album.release_year || '?'}</span>
-                        </div>
+            const rawUrl = (album.image && album.image.length > 5) ? album.image : 
+                        (album.image_url && album.image_url.length > 5) ? album.image_url : null;
+
+            const imageUrl = rawUrl 
+                ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
+                : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+
+            card.innerHTML = `
+                <img 
+                    src="${imageUrl}" 
+                    alt="${album.name}"
+                    class="album-cover"
+                    crossorigin="anonymous" 
+                    onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+                >
+                <div class="album-info">
+                    <div class="album-name" title="${album.name}">${album.name}</div>
+                    <div class="album-artist" title="${album.artist}">${album.artist}</div>
+                    <div class="album-meta">
+                        <span class="album-rank">#${index + 1}</span>
+                        <span class="album-playcount">${album.playcount.toLocaleString()}</span>
+                        <span class="album-year">${album.release_year || '?'}</span>
                     </div>
-                `;
-
-                grid.appendChild(card);
-            });
-        }
-
-        document.getElementById('downloadBtn').addEventListener('click', async () => {
-            const btn = document.getElementById('downloadBtn');
-            btn.disabled = true;
-            btn.textContent = '⏳ generating...';
-
-            try {
-                if (currentView === 'card') {
-                    await downloadCardView();
-                } else {
-                    await downloadCollageView();
-                }
-            } catch (err) {
-                console.error('Download error:', err);
-                alert('Failed to generate image. Please try again.');
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `📸 Download <span id="downloadType">${currentView === 'Card' ? 'Cards' : 'collage'}</span>`;
-            }
-        });
-
-        // Download functionality
-
-        async function downloadCardView() {
-            const username = document.getElementById('username').value.trim();
-            const grid = document.getElementById('albumsGrid');
-            const count = currentAlbums.length;
-
-        // Create a wrapper div with title and grid
-            const wrapper = document.createElement('div');
-            wrapper.style.backgroundColor = '#C4E0E0';
-            wrapper.style.padding = '40px';
-            wrapper.style.fontFamily = '"Martian Mono", monospace';
-
-        // 🔒 LOCK WIDTH TO MATCH WIDGET (THIS FIXES 4 vs 5 COLUMNS)
-            wrapper.style.width = '1400px';
-            wrapper.style.maxWidth = '1400px';
-
-         // Add title
-            const title = document.createElement('div');
-            title.style.textAlign = 'center';
-            title.style.marginBottom = '30px';
-            title.innerHTML = `
-                <div style="font-size: 48px; font-weight: 700; color: #4A1DC0; margin-bottom: 10px;">
-                    My Top ${count} Albums of ${currentFilter}
                 </div>
             `;
-            wrapper.appendChild(title);
 
-            // Clone the grid
-            const gridClone = grid.cloneNode(true);
-            gridClone.style.backgroundColor = 'transparent';
+            grid.appendChild(card);
+        });
+    }
 
-            // 🔒 FORCE 5-COLUMN GRID (BELT + SUSPENDERS)
-            gridClone.style.gridTemplateColumns = 'repeat(5, 1fr)';
+    document.getElementById('downloadBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('downloadBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ generating...';
 
-            wrapper.appendChild(gridClone);
-
-            
-            // Add watermark
-            const watermark = document.createElement('div');
-            watermark.style.textAlign = 'center';
-            watermark.style.marginTop = '30px';
-            watermark.style.fontSize = '20px';
-            watermark.style.color = '#4A1DC0';
-            watermark.textContent = 'sortedsongs.com/tools/album-explorer';
-            wrapper.appendChild(watermark);
-            
-            // Temporarily add to document
-            wrapper.style.position = 'absolute';
-            wrapper.style.left = '-9999px';
-            document.body.appendChild(wrapper);
-            
-            // Use html2canvas to capture the wrapper
-            const canvas = await html2canvas(wrapper, {
-                backgroundColor: '#C4E0E0',
-                scale: 2,
-                logging: false,
-                useCORS: true,
-                width: wrapper.offsetWidth,
-                height: wrapper.offsetHeight
-            });
-            
-            // Remove wrapper
-            document.body.removeChild(wrapper);
-
-            // Download
-            downloadCanvas(canvas, `${username}_cards_${currentFilter.replace(/\s+/g, '_')}.png`);
-        }
-
-        async function downloadCollageView() {
-            const username = document.getElementById('username').value.trim();
-            const albums = currentAlbums;
-            const count = albums.length;
-            
-            // Determine grid dimensions
-            let cols, rows;
-            if (count === 4) {
-                cols = 2; rows = 2;
-            } else if (count === 10) {
-                cols = 5; rows = 2; // Landscape
-            } else if (count === 20) {
-                cols = 5; rows = 4;
+        try {
+            if (currentView === 'card') {
+                await downloadCardView();
             } else {
-                // Fallback for other counts
-                cols = Math.ceil(Math.sqrt(count));
-                rows = Math.ceil(count / cols);
+                await downloadCollageView();
             }
+        } catch (err) {
+            console.error('Download error:', err);
+            alert('Failed to generate image. Please try again.');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = `📸 Download <span id="downloadType">${currentView === 'Card' ? 'Cards' : 'collage'}</span>`;
+        }
+    });
 
-            const albumSize = 400; // 400px per album for 2000px wide image
-            const headerHeight = 120;
-            const footerHeight = 60;
-            const padding = 40;
+    // Download functionality
 
-            const canvas = document.createElement('canvas');
-            canvas.width = cols * albumSize;
-            canvas.height = rows * albumSize + headerHeight + footerHeight;
-            const ctx = canvas.getContext('2d');
+    async function downloadCardView() {
+        const username = document.getElementById('username').value.trim();
+        const grid = document.getElementById('albumsGrid');
+        const count = currentAlbums.length;
 
-            // Background
-            ctx.fillStyle = '#C4E0E0';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Create a wrapper div with title and grid
+        const wrapper = document.createElement('div');
+        wrapper.style.backgroundColor = '#C4E0E0';
+        wrapper.style.padding = '40px';
+        wrapper.style.fontFamily = '"Martian Mono", monospace';
 
-            // Header text
-            ctx.fillStyle = '#4A1DC0';
-            ctx.font = 'bold 48px "Martian Mono"';
-            ctx.textAlign = 'center';
-            ctx.fillText(`My Top ${count} Albums of ${currentFilter}`, canvas.width / 2, 70);
+    // 🔒 LOCK WIDTH TO MATCH WIDGET (THIS FIXES 4 vs 5 COLUMNS)
+        wrapper.style.width = '1400px';
+        wrapper.style.maxWidth = '1400px';
 
-            // Load and draw album covers
-            const imagePromises = albums.slice(0, count).map((album, index) => {
-                return new Promise((resolve) => {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    
-                    const imageUrl = album.image || album.image_url || '';
-                    
-                    img.onload = () => {
-                        const col = index % cols;
-                        const row = Math.floor(index / cols);
-                        const x = col * albumSize;
-                        const y = row * albumSize + headerHeight;
-                        
-                        ctx.drawImage(img, x, y, albumSize, albumSize);
-                        resolve();
-                    };
-                    
-                    img.onerror = () => {
-                        // Draw placeholder
-                        const col = index % cols;
-                        const row = Math.floor(index / cols);
-                        const x = col * albumSize;
-                        const y = row * albumSize + headerHeight;
-                        
-                        ctx.fillStyle = '#4A1DC0';
-                        ctx.fillRect(x, y, albumSize, albumSize);
-                        ctx.fillStyle = '#C4E0E0';
-                        ctx.font = '24px "Martian Mono"';
-                        ctx.textAlign = 'center';
-                        ctx.fillText('No Image', x + albumSize / 2, y + albumSize / 2);
-                        resolve();
-                    };
-                    
-                    // Try to use a proxy to avoid CORS
-                    if (imageUrl) {
-                        img.src = imageUrl.replace('https://lastfm.freetls.fastly.net', 'https://lastfm.freetls.fastly.net');
-                    } else {
-                        img.onerror();
-                    }
-                });
+        // Add title
+        const title = document.createElement('div');
+        title.style.textAlign = 'center';
+        title.style.marginBottom = '30px';
+        title.innerHTML = `
+            <div style="font-size: 48px; font-weight: 700; color: #4A1DC0; margin-bottom: 10px;">
+                My Top ${count} Albums of ${currentFilter}
+            </div>
+        `;
+        wrapper.appendChild(title);
+
+        // Clone the grid
+        const gridClone = grid.cloneNode(true);
+        gridClone.style.backgroundColor = 'transparent';
+
+        // 🔒 FORCE 5-COLUMN GRID (BELT + SUSPENDERS)
+        gridClone.style.gridTemplateColumns = 'repeat(5, 1fr)';
+
+        wrapper.appendChild(gridClone);
+
+        
+        // Add watermark
+        const watermark = document.createElement('div');
+        watermark.style.textAlign = 'center';
+        watermark.style.marginTop = '30px';
+        watermark.style.fontSize = '20px';
+        watermark.style.color = '#4A1DC0';
+        watermark.textContent = 'sortedsongs.com/tools/album-explorer';
+        wrapper.appendChild(watermark);
+        
+        // Temporarily add to document
+        wrapper.style.position = 'absolute';
+        wrapper.style.left = '-9999px';
+        document.body.appendChild(wrapper);
+        
+        // Use html2canvas to capture the wrapper
+        const canvas = await html2canvas(wrapper, {
+            backgroundColor: '#C4E0E0',
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            width: wrapper.offsetWidth,
+            height: wrapper.offsetHeight
+        });
+        
+        // Remove wrapper
+        document.body.removeChild(wrapper);
+
+        // Download
+        downloadCanvas(canvas, `${username}_cards_${currentFilter.replace(/\s+/g, '_')}.png`);
+    }
+
+    async function downloadCollageView() {
+        const username = document.getElementById('username').value.trim();
+        const albums = currentAlbums;
+        const count = albums.length;
+        
+        // Determine grid dimensions
+        let cols, rows;
+        if (count === 4) {
+            cols = 2; rows = 2;
+        } else if (count === 10) {
+            cols = 5; rows = 2; // Landscape
+        } else if (count === 20) {
+            cols = 5; rows = 4;
+        } else {
+            // Fallback for other counts
+            cols = Math.ceil(Math.sqrt(count));
+            rows = Math.ceil(count / cols);
+        }
+
+        const albumSize = 400; // 400px per album for 2000px wide image
+        const headerHeight = 120;
+        const footerHeight = 60;
+        const padding = 40;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = cols * albumSize;
+        canvas.height = rows * albumSize + headerHeight + footerHeight;
+        const ctx = canvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = '#C4E0E0';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Header text
+        ctx.fillStyle = '#4A1DC0';
+        ctx.font = 'bold 48px "Martian Mono"';
+        ctx.textAlign = 'center';
+        ctx.fillText(`My Top ${count} Albums of ${currentFilter}`, canvas.width / 2, 70);
+
+        // Load and draw album covers
+        const imagePromises = albums.slice(0, count).map((album, index) => {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                
+                // Use our new proxy logic
+                const rawUrl = album.image || album.image_url;
+                
+                img.onload = () => {
+                    const col = index % cols;
+                    const row = Math.floor(index / cols);
+                    const x = col * albumSize;
+                    const y = row * albumSize + headerHeight;
+                    ctx.drawImage(img, x, y, albumSize, albumSize);
+                    resolve();
+                };
+                
+                img.onerror = () => {
+                    const col = index % cols;
+                    const row = Math.floor(index / cols);
+                    const x = col * albumSize;
+                    const y = row * albumSize + headerHeight;
+                    ctx.fillStyle = '#4A1DC0';
+                    ctx.fillRect(x, y, albumSize, albumSize);
+                    ctx.fillStyle = '#C4E0E0';
+                    ctx.font = '24px "Martian Mono"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('No Image', x + albumSize / 2, y + albumSize / 2);
+                    resolve();
+                };
+                
+                // USE PROXY HERE
+                if (rawUrl && rawUrl.length > 5) {
+                    img.src = `/api/proxy-image?url=${encodeURIComponent(rawUrl)}`;
+                } else {
+                    img.onerror();
+                }
             });
+        });
 
-            await Promise.all(imagePromises);
+        await Promise.all(imagePromises);
 
-            // Footer watermark
-            ctx.fillStyle = '#4A1DC0';
-            ctx.font = '18px "Martian Mono"';
-            ctx.textAlign = 'center';
-            ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width / 2, canvas.height - 25);
+        // Footer watermark
+        ctx.fillStyle = '#4A1DC0';
+        ctx.font = '18px "Martian Mono"';
+        ctx.textAlign = 'center';
+        ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width / 2, canvas.height - 25);
 
-            // Download
-            downloadCanvas(canvas, `${username}_collage_${currentFilter.replace(/\s+/g, '_')}.png`);
-        }
+        // Download
+        downloadCanvas(canvas, `${username}_collage_${currentFilter.replace(/\s+/g, '_')}.png`);
+    }
 
-        function downloadCanvas(canvas, filename) {
-            canvas.toBlob((blob) => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                a.click();
-                URL.revokeObjectURL(url);
-            }, 'image/png');
-        }
+    function downloadCanvas(canvas, filename) {
+        canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }, 'image/png');
+    }
 
-        function hideAll() {
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('results').style.display = 'none';
-            document.getElementById('noResults').style.display = 'none';
-        }
+    function hideAll() {
+        document.getElementById('error').style.display = 'none';
+        document.getElementById('results').style.display = 'none';
+        document.getElementById('noResults').style.display = 'none';
+    }
 
-        function showError(message) {
-            const errorDiv = document.getElementById('error');
-            errorDiv.textContent = '⚠️ ' + message;
-            errorDiv.style.display = 'block';
-        }
+    function showError(message) {
+        const errorDiv = document.getElementById('error');
+        errorDiv.textContent = '⚠️ ' + message;
+        errorDiv.style.display = 'block';
+    }
 
-        // Auto-resize for WordPress iframe
-        function sendHeight() {
-            const height = document.documentElement.scrollHeight;
-            window.parent.postMessage({ type: 'resize', height: height }, '*');
-        }
+    // Auto-resize for WordPress iframe
+    function sendHeight() {
+        const height = document.documentElement.scrollHeight;
+        window.parent.postMessage({ type: 'resize', height: height }, '*');
+    }
 
-        window.addEventListener('load', sendHeight);
-        window.addEventListener('resize', sendHeight);
+    window.addEventListener('load', sendHeight);
+    window.addEventListener('resize', sendHeight);
 
-        const observer = new MutationObserver(sendHeight);
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-    </script>
+    const observer = new MutationObserver(sendHeight);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+</script>
 </body>
 </html>
