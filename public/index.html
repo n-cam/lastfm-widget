@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         :root {
             --base: #C4E0E0;
@@ -36,7 +37,6 @@
             margin: 0 auto;
         }
 
-        /* Section styling matching Spotify app */
         .section {
             background: white;
             border: 3px solid var(--primary);
@@ -53,7 +53,6 @@
             margin-bottom: 16px;
         }
 
-        /* Form elements */
         .form-section {
             margin-bottom: 16px;
         }
@@ -88,7 +87,6 @@
             box-shadow: 1px 1px 0 var(--primary);
         }
 
-        /* Buttons matching Spotify style */
         .btn,
         button[type="submit"] {
             padding: 10px 18px;
@@ -134,7 +132,6 @@
             color: var(--primary);
         }
 
-        /* Filter tabs */
         .filter-tabs {
             display: flex;
             gap: 8px;
@@ -194,7 +191,6 @@
             gap: 12px;
         }
 
-        /* Info bar */
         .info-bar {
             background: rgba(240, 144, 181, 0.2);
             border: 2px solid var(--primary);
@@ -211,7 +207,6 @@
             text-decoration: underline;
         }
 
-        /* Stats grid */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -242,7 +237,6 @@
             letter-spacing: 0.5px;
         }
 
-        /* Loading */
         .loading {
             text-align: center;
             padding: 40px;
@@ -263,7 +257,6 @@
             to { transform: rotate(360deg); }
         }
 
-        /* Error */
         .error {
             background: #FF6B6B;
             color: white;
@@ -276,7 +269,6 @@
             box-shadow: 4px 4px 0 #d93636;
         }
 
-        /* Results header */
         .results-header {
             display: flex;
             justify-content: space-between;
@@ -329,7 +321,38 @@
             box-shadow: inset 2px 2px 4px rgba(0,0,0,0.1);
         }
 
-        /* Albums grid */
+        /* View Toggle */
+        .view-toggle {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+
+        .view-btn {
+            padding: 8px 16px;
+            background: white;
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            color: var(--primary);
+            font-family: 'Martian Mono', monospace;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            box-shadow: 2px 2px 0 var(--primary);
+        }
+
+        .view-btn:hover {
+            transform: translate(1px, 1px);
+            box-shadow: 1px 1px 0 var(--primary);
+        }
+
+        .view-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Albums Grid - Card View */
         .albums-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -376,8 +399,8 @@
             padding: 12px;
             display: flex;
             flex-direction: column;
-            flex-grow: 1; 
-            justify-content: space-between; 
+            flex-grow: 1;
+            justify-content: space-between;
         }
 
         .album-name {
@@ -425,6 +448,38 @@
             font-weight: 600;
         }
 
+        /* Collage View */
+        body.collage-view .albums-grid {
+            gap: 0;
+        }
+
+        body.collage-view .album-card {
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
+
+        body.collage-view .album-card:hover {
+            transform: none;
+            box-shadow: none;
+        }
+
+        body.collage-view .album-info {
+            display: none;
+        }
+
+        /* Download Button */
+        .download-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 3px solid var(--base);
+        }
+
+        .download-btn {
+            background: var(--primary);
+            color: white;
+        }
+
         .no-results {
             text-align: center;
             padding: 60px 20px;
@@ -438,7 +493,6 @@
             margin-bottom: 8px;
         }
 
-        /* Footer */
         .footer {
             text-align: center;
             padding: 20px;
@@ -453,7 +507,6 @@
             text-decoration: underline;
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
             body {
                 padding: 12px;
@@ -473,19 +526,19 @@
             }
 
             .album-card {
-            border: 2px solid var(--primary);
-            box-shadow: 2px 2px 0 var(--primary);
-        }
+                border: 2px solid var(--primary);
+                box-shadow: 2px 2px 0 var(--primary);
+            }
 
             .album-meta {
                 font-size: 9px;
                 gap: 2px;
             }
-  
+
             .album-rank {
                 font-size: 9px;
                 padding: 3px 6px;
-  }
+            }
 
             .filter-tabs {
                 flex-direction: column;
@@ -585,9 +638,9 @@
                     <div class="form-section">
                         <label for="limit">Show:</label>
                         <select id="limit">
-                            <option value="4" selected>top 4</option>
+                            <option value="4">top 4</option>
                             <option value="10">top 10</option>
-                            <option value="20">top 20</option>
+                            <option value="20" selected>top 20</option>
                         </select>
                     </div>
                 </div>
@@ -637,7 +690,19 @@
                         <button class="sort-btn" data-sort="name">a-z</button>
                     </div>
                 </div>
+
+                <div class="view-toggle">
+                    <button class="view-btn active" data-view="card">📱 card view</button>
+                    <button class="view-btn" data-view="collage">🎨 collage view</button>
+                </div>
+
                 <div id="albumsGrid" class="albums-grid"></div>
+
+                <div class="download-section">
+                    <button class="btn download-btn" id="downloadBtn">
+                        📸 download <span id="downloadType">cards</span>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -656,10 +721,11 @@
     <script>
         const API_URL = '/api/top-albums';
         const STATS_URL = '/api/cache/stats';
-        const UPDATE_URL = '/api/update';
 
         let currentAlbums = [];
         let currentSort = 'playcount';
+        let currentView = 'card';
+        let currentFilter = '';
 
         // Filter tabs
         document.querySelectorAll('.tab').forEach(tab => {
@@ -671,6 +737,24 @@
                 const filterId = tab.dataset.filter + 'Filter';
                 const filterSection = document.getElementById(filterId);
                 if (filterSection) filterSection.classList.add('active');
+            });
+        });
+
+        // View toggle
+        document.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                currentView = btn.dataset.view;
+                
+                if (currentView === 'collage') {
+                    document.body.classList.add('collage-view');
+                    document.getElementById('downloadType').textContent = 'collage';
+                } else {
+                    document.body.classList.remove('collage-view');
+                    document.getElementById('downloadType').textContent = 'cards';
+                }
             });
         });
 
@@ -706,11 +790,12 @@
                 }
             }
 
+            currentFilter = filterText;
+
             hideAll();
             document.getElementById('loading').style.display = 'block';
             document.getElementById('submitBtn').disabled = true;
             
-            // Update loading message based on filters
             if (activeFilter !== 'all') {
                 document.getElementById('loadingMessage').textContent = 'scanning your top 500 albums...';
                 document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~3-8 minutes)';
@@ -766,7 +851,6 @@
                 if (response.ok) {
                     const data = await response.json();
                     
-                    // Check if user is in realtime mode
                     if (data.mode === 'realtime') {
                         console.log('User is in real-time mode (no cache)');
                         document.getElementById('statsCard').style.display = 'none';
@@ -775,13 +859,11 @@
                     
                     updateStatsCard(data);
                 } else {
-                    // If stats fail, just hide the card - don't block the user
                     console.log('Could not fetch stats, continuing anyway');
                     document.getElementById('statsCard').style.display = 'none';
                 }
             } catch (err) {
                 console.error('failed to fetch stats:', err);
-                // Hide stats card if it fails
                 document.getElementById('statsCard').style.display = 'none';
             }
         }
@@ -846,26 +928,175 @@
                  (album.image_url && album.image_url.trim()) || 
                  'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
 
-card.innerHTML = `
-    <img 
-        src="${imageUrl}" 
-        alt="${album.name}"
-        class="album-cover"
-        onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
-    >
-    <div class="album-info">
-        <div class="album-name" title="${album.name}">${album.name}</div>
-        <div class="album-artist" title="${album.artist}">${album.artist}</div>
-        <div class="album-meta">
-            <span class="album-rank">#${index + 1}</span>
-            <span class="album-playcount">${album.playcount.toLocaleString()}</span>
-            <span class="album-year">${album.release_year || '?'}</span>
-        </div>
-    </div>
+                card.innerHTML = `
+                    <img 
+                        src="${imageUrl}" 
+                        alt="${album.name}"
+                        class="album-cover"
+                        onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+                    >
+                    <div class="album-info">
+                        <div class="album-name" title="${album.name}">${album.name}</div>
+                        <div class="album-artist" title="${album.artist}">${album.artist}</div>
+                        <div class="album-meta">
+                            <span class="album-rank">#${index + 1}</span>
+                            <span class="album-playcount">${album.playcount.toLocaleString()}</span>
+                            <span class="album-year">${album.release_year || '?'}</span>
+                        </div>
+                    </div>
                 `;
 
                 grid.appendChild(card);
             });
+        }
+
+        // Download functionality
+        document.getElementById('downloadBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('downloadBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ generating...';
+
+            try {
+                if (currentView === 'card') {
+                    await downloadCardView();
+                } else {
+                    await downloadCollageView();
+                }
+            } catch (err) {
+                console.error('Download error:', err);
+                alert('Failed to generate image. Please try again.');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `📸 download <span id="downloadType">${currentView === 'card' ? 'cards' : 'collage'}</span>`;
+            }
+        });
+
+        async function downloadCardView() {
+            const grid = document.getElementById('albumsGrid');
+            const username = document.getElementById('username').value.trim();
+            
+            // Use html2canvas to capture the grid
+            const canvas = await html2canvas(grid, {
+                backgroundColor: '#ffffff',
+                scale: 2, // Higher quality
+                logging: false,
+                useCORS: true
+            });
+
+            // Add watermark
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'bold 24px "Martian Mono"';
+            ctx.fillStyle = '#4A1DC0';
+            ctx.textAlign = 'right';
+            ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width - 20, canvas.height - 20);
+
+            // Download
+            downloadCanvas(canvas, `${username}_cards_${currentFilter.replace(/\s+/g, '_')}.png`);
+        }
+
+        async function downloadCollageView() {
+            const username = document.getElementById('username').value.trim();
+            const albums = currentAlbums;
+            const count = albums.length;
+            
+            // Determine grid dimensions
+            let cols, rows;
+            if (count === 4) {
+                cols = 2; rows = 2;
+            } else if (count === 10) {
+                cols = 5; rows = 2; // Landscape
+            } else if (count === 20) {
+                cols = 5; rows = 4;
+            } else {
+                // Fallback for other counts
+                cols = Math.ceil(Math.sqrt(count));
+                rows = Math.ceil(count / cols);
+            }
+
+            const albumSize = 400; // 400px per album for 2000px wide image
+            const headerHeight = 120;
+            const footerHeight = 60;
+            const padding = 40;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = cols * albumSize;
+            canvas.height = rows * albumSize + headerHeight + footerHeight;
+            const ctx = canvas.getContext('2d');
+
+            // Background
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Header text
+            ctx.fillStyle = '#4A1DC0';
+            ctx.font = 'bold 48px "Martian Mono"';
+            ctx.textAlign = 'center';
+            ctx.fillText(`My Top ${count} Albums of ${currentFilter}`, canvas.width / 2, 70);
+
+            // Load and draw album covers
+            const imagePromises = albums.slice(0, count).map((album, index) => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    
+                    const imageUrl = album.image || album.image_url || '';
+                    
+                    img.onload = () => {
+                        const col = index % cols;
+                        const row = Math.floor(index / cols);
+                        const x = col * albumSize;
+                        const y = row * albumSize + headerHeight;
+                        
+                        ctx.drawImage(img, x, y, albumSize, albumSize);
+                        resolve();
+                    };
+                    
+                    img.onerror = () => {
+                        // Draw placeholder
+                        const col = index % cols;
+                        const row = Math.floor(index / cols);
+                        const x = col * albumSize;
+                        const y = row * albumSize + headerHeight;
+                        
+                        ctx.fillStyle = '#C4E0E0';
+                        ctx.fillRect(x, y, albumSize, albumSize);
+                        ctx.fillStyle = '#4A1DC0';
+                        ctx.font = '24px "Martian Mono"';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('No Image', x + albumSize / 2, y + albumSize / 2);
+                        resolve();
+                    };
+                    
+                    // Try to use a proxy to avoid CORS
+                    if (imageUrl) {
+                        img.src = imageUrl.replace('https://lastfm.freetls.fastly.net', 'https://lastfm.freetls.fastly.net');
+                    } else {
+                        img.onerror();
+                    }
+                });
+            });
+
+            await Promise.all(imagePromises);
+
+            // Footer watermark
+            ctx.fillStyle = '#4A1DC0';
+            ctx.font = '24px "Martian Mono"';
+            ctx.textAlign = 'center';
+            ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width / 2, canvas.height - 25);
+
+            // Download
+            downloadCanvas(canvas, `${username}_collage_${currentFilter.replace(/\s+/g, '_')}.png`);
+        }
+
+        function downloadCanvas(canvas, filename) {
+            canvas.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+            }, 'image/png');
         }
 
         function hideAll() {
@@ -886,9 +1117,8 @@ card.innerHTML = `
             window.parent.postMessage({ type: 'resize', height: height }, '*');
         }
 
-        // Send height on load and when content changes
         window.addEventListener('load', sendHeight);
-        window.addEventListener('resize', sendHeight); // Added this for mobile 
+        window.addEventListener('resize', sendHeight);
 
         const observer = new MutationObserver(sendHeight);
         observer.observe(document.body, { childList: true, subtree: true, attributes: true });
