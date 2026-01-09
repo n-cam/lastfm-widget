@@ -1042,12 +1042,12 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = $${paramIndex}`;
+      query += ` WHERE release_year = ${paramIndex}`;
       params.push(year);
       paramIndex++;
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex}`;
+    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
