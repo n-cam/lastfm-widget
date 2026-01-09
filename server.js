@@ -33,7 +33,12 @@ function setQueryCache(key, data, ttlMs = 600000) {
     expires: Date.now() + ttlMs
   });
 }
+
 // ==========================================
+// 🆕 GLOBAL MUSICBRAINZ CACHE
+// ==========================================
+const mbGlobalCache = new Map();
+const mbFailureCache = new Map();
 
 // Database setup
 let db;
@@ -45,7 +50,7 @@ if (process.env.DATABASE_URL) {
   db = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    max: 15, // Increased from 5
+    max: 15,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
   });
@@ -60,13 +65,7 @@ if (process.env.DATABASE_URL) {
 
 const CACHED_USERS = (process.env.CACHED_USERS || '').split(',').filter(Boolean);
 
-// ==========================================
-// 🆕 GLOBAL MUSICBRAINZ CACHE
-// ==========================================
-const mbGlobalCache = new Map();
-const mbFailureCache = new Map();
-
-// Initialize optimized database schema with canonical name as logical primary key
+// Initialize clean database schema
 async function initDatabase() {
   if (dbType === 'postgres') {
     await db.query(`
@@ -179,144 +178,8 @@ async function dbRun(query, params = []) {
   }
 }
 
-// ==========================================
-// 🆕 ONE-TIME MIGRATION: Deduplicate existing data
-// ==========================================
-async function runDeduplicationMigration() {
-  console.log('\n🔄 Running deduplication migration...');
-  
-  try {
-    // Check if old schema exists
-    const hasOldSchema = await dbGet(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'albums_global' 
-        AND column_name = 'musicbrainz_id'
-        AND is_nullable = 'NO'
-    `);
-    
-    if (!hasOldSchema) {
-      console.log('✅ Already migrated or new installation');
-      return;
-    }
-
-    console.log('📊 Found old schema, starting migration...');
-    
-    // Step 1: Create new tables with correct schema
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS albums_global_new (
-        id SERIAL PRIMARY KEY,
-        canonical_album TEXT NOT NULL,
-        canonical_artist TEXT NOT NULL,
-        album_name TEXT NOT NULL,
-        artist_name TEXT NOT NULL,
-        musicbrainz_id TEXT,
-        release_year INTEGER,
-        image_url TEXT,
-        lastfm_url TEXT,
-        album_type TEXT,
-        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(canonical_album, canonical_artist)
-      );
-
-      CREATE TABLE IF NOT EXISTS user_albums_new (
-        id SERIAL PRIMARY KEY,
-        username TEXT NOT NULL,
-        album_id INTEGER NOT NULL REFERENCES albums_global_new(id) ON DELETE CASCADE,
-        playcount INTEGER DEFAULT 0,
-        last_scrobble TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(username, album_id)
-      );
-    `);
-
-    // Step 2: Migrate albums_global with deduplication
-    const oldAlbums = await dbQuery(`
-      SELECT DISTINCT ON (canonical_album, canonical_artist)
-        canonical_album,
-        canonical_artist,
-        album_name,
-        artist_name,
-        musicbrainz_id,
-        release_year,
-        image_url,
-        lastfm_url,
-        album_type,
-        first_seen
-      FROM albums_global
-      ORDER BY canonical_album, canonical_artist, 
-        CASE WHEN release_year IS NOT NULL THEN 0 ELSE 1 END,
-        first_seen
-    `);
-
-    console.log(`  Migrating ${oldAlbums.length} unique albums...`);
-
-    for (const album of oldAlbums) {
-      await db.query(`
-        INSERT INTO albums_global_new (
-          canonical_album, canonical_artist, album_name, artist_name,
-          musicbrainz_id, release_year, image_url, lastfm_url,
-          album_type, first_seen, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
-        ON CONFLICT (canonical_album, canonical_artist) DO NOTHING
-      `, [
-        album.canonical_album, album.canonical_artist, album.album_name,
-        album.artist_name, album.musicbrainz_id, album.release_year,
-        album.image_url, album.lastfm_url, album.album_type, album.first_seen
-      ]);
-    }
-
-    // Step 3: Migrate user_albums WITHOUT inflating playcounts
-    console.log('  Migrating user album data (preserving playcounts)...');
-    
-    await db.query(`
-      INSERT INTO user_albums_new (username, album_id, playcount, updated_at)
-      SELECT DISTINCT ON (ua.username, agn.id)
-        ua.username,
-        agn.id,
-        MAX(ua.playcount), -- Take highest playcount if duplicates exist
-        CURRENT_TIMESTAMP
-      FROM user_albums ua
-      JOIN albums_global ag ON ua.musicbrainz_id = ag.musicbrainz_id
-      JOIN albums_global_new agn ON 
-        ag.canonical_album = agn.canonical_album 
-        AND ag.canonical_artist = agn.canonical_artist
-      GROUP BY ua.username, agn.id
-      ON CONFLICT (username, album_id) DO NOTHING
-    `);
-
-    // Step 4: Drop old tables and rename
-    await db.query('DROP TABLE IF EXISTS user_albums CASCADE');
-    await db.query('DROP TABLE IF EXISTS albums_global CASCADE');
-    await db.query('ALTER TABLE albums_global_new RENAME TO albums_global');
-    await db.query('ALTER TABLE user_albums_new RENAME TO user_albums');
-
-    // Step 5: Recreate indexes
-    await db.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_albums_username ON user_albums(username);
-      CREATE INDEX IF NOT EXISTS idx_user_albums_playcount ON user_albums(playcount);
-      CREATE INDEX IF NOT EXISTS idx_albums_global_year ON albums_global(release_year);
-      CREATE INDEX IF NOT EXISTS idx_albums_global_canonical ON albums_global(canonical_album, canonical_artist);
-      CREATE INDEX IF NOT EXISTS idx_albums_global_mbid ON albums_global(musicbrainz_id);
-    `);
-
-    console.log('✅ Migration complete!');
-    
-  } catch (err) {
-    console.error('❌ Migration failed:', err);
-    console.log('Please check your database manually');
-  }
-}
-
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
-  
-  // Run migration if needed (only for Postgres, SQLite will be fresh)
-  if (dbType === 'postgres') {
-    await runDeduplicationMigration();
-  }
-  
   console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
 
   if (dbType === 'postgres') {
@@ -397,20 +260,15 @@ function stringSimilarity(str1, str2) {
   return jaccard * 0.7 + lengthRatio * 0.3;
 }
 
-// ==========================================
-// 🆕 IMPROVED: MusicBrainz lookup with global cache
-// ==========================================
 async function getMusicBrainzData(artist, album) {
   const cleanedAlbum = cleanAlbumName(album);
   const cleanedArtist = cleanArtistName(artist);
   const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
   
-  // Check global cache first
   if (mbGlobalCache.has(cacheKey)) {
     return mbGlobalCache.get(cacheKey);
   }
 
-  // Check if we recently failed this lookup
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
     if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
@@ -573,45 +431,6 @@ async function getMusicBrainzData(artist, album) {
   }
 }
 
-async function fetchAllAlbums(username, totalLimit) {
-  const perPage = 1000;
-  const pages = Math.ceil(totalLimit / perPage);
-  let allAlbums = [];
-
-  console.log(`📥 Fetching ${totalLimit} albums in ${pages} page(s)...`);
-
-  for (let page = 1; page <= pages; page++) {
-    const limit = Math.min(perPage, totalLimit - allAlbums.length);
-    const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${limit}&page=${page}`;
-    
-    console.log(`  Page ${page}/${pages}: Fetching ${limit} albums...`);
-    
-    const response = await fetch(lastfmUrl);
-    const data = await response.json();
-
-    if (!data.topalbums || !data.topalbums.album) {
-      console.log(`  ⚠️  No more albums found at page ${page}`);
-      break;
-    }
-
-    const albums = Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album];
-    allAlbums.push(...albums);
-
-    console.log(`  ✓ Page ${page}/${pages}: Got ${albums.length} albums (total: ${allAlbums.length})`);
-
-    if (albums.length < limit) {
-      console.log(`  ℹ️  Reached end of user's library`);
-      break;
-    }
-
-    if (page < pages) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  }
-
-  return allAlbums;
-}
-
 function formatQueryLog(username, params) {
   const { year, decade, yearStart, yearEnd, limit, artist } = params;
   let filterDesc = 'all time';
@@ -625,9 +444,6 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
-// ==========================================
-// 🆕 IMPROVED: Background update with canonical name logic
-// ==========================================
 async function performBackgroundUpdate(username, full, limit) {
   const processStart = Date.now();
   console.log(`🚀 [${new Date().toISOString()}] BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
@@ -863,9 +679,6 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' }
 });
 
-// ==========================================
-// 🆕 WARMUP ENDPOINT
-// ==========================================
 app.get('/warmup', async (req, res) => {
   try {
     await dbGet('SELECT 1');
@@ -1119,7 +932,7 @@ app.get('/api/top-albums', async (req, res) => {
     let pIdx = 2;
 
     if (year) {
-      query += ` AND ag.release_year = $${pIdx} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year = ${pIdx} AND ag.release_year IS NOT NULL`;
       params.push(year);
       pIdx++;
     } 
@@ -1127,18 +940,18 @@ app.get('/api/top-albums', async (req, res) => {
       const start = decade || yearStart;
       const end = decade ? (decade + 9) : yearEnd;
       
-      query += ` AND ag.release_year BETWEEN $${pIdx} AND $${pIdx + 1} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year BETWEEN ${pIdx} AND ${pIdx + 1} AND ag.release_year IS NOT NULL`;
       params.push(start, end);
       pIdx += 2;
     }
 
     if (artist) {
-      query += ` AND (LOWER(ag.artist_name) LIKE $${pIdx} OR LOWER(ag.canonical_artist) LIKE $${pIdx + 1})`;
+      query += ` AND (LOWER(ag.artist_name) LIKE ${pIdx} OR LOWER(ag.canonical_artist) LIKE ${pIdx + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
       pIdx += 2;
     }
 
-    query += ` ORDER BY ua.playcount DESC LIMIT $${pIdx}`;
+    query += ` ORDER BY ua.playcount DESC LIMIT ${pIdx}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
@@ -1231,7 +1044,7 @@ app.get('/api/albums/all', async (req, res) => {
     if (year) {
       query += ` WHERE release_year = $${paramIndex}`;
       params.push(year);
-      paramIndex++; // Incremented this so the limit works correctly
+      paramIndex++;
     }
 
     query += ` ORDER BY updated_at DESC LIMIT $${paramIndex}`;
