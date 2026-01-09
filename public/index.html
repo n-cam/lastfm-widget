@@ -951,7 +951,6 @@
             });
         }
 
-        // Download functionality
         document.getElementById('downloadBtn').addEventListener('click', async () => {
             const btn = document.getElementById('downloadBtn');
             btn.disabled = true;
@@ -972,35 +971,42 @@
             }
         });
 
+        // Download functionality
+
+        async function downloadCardView() {
+            const username = document.getElementById('username').value.trim();
+            const grid = document.getElementById('albumsGrid');
+            const count = currentAlbums.length;
+
         // Create a wrapper div with title and grid
-const wrapper = document.createElement('div');
-wrapper.style.backgroundColor = '#C4E0E0';
-wrapper.style.padding = '40px';
-wrapper.style.fontFamily = '"Martian Mono", monospace';
+            const wrapper = document.createElement('div');
+            wrapper.style.backgroundColor = '#C4E0E0';
+            wrapper.style.padding = '40px';
+            wrapper.style.fontFamily = '"Martian Mono", monospace';
 
-// 🔒 LOCK WIDTH TO MATCH WIDGET (THIS FIXES 4 vs 5 COLUMNS)
-wrapper.style.width = '1400px';
-wrapper.style.maxWidth = '1400px';
+        // 🔒 LOCK WIDTH TO MATCH WIDGET (THIS FIXES 4 vs 5 COLUMNS)
+            wrapper.style.width = '1400px';
+            wrapper.style.maxWidth = '1400px';
 
-// Add title
-const title = document.createElement('div');
-title.style.textAlign = 'center';
-title.style.marginBottom = '30px';
-title.innerHTML = `
-    <div style="font-size: 36px; font-weight: 600; color: #4A1DC0; margin-bottom: 10px;">
-        My Top ${count} Albums of ${currentFilter}
-    </div>
-`;
-wrapper.appendChild(title);
+         // Add title
+            const title = document.createElement('div');
+            title.style.textAlign = 'center';
+            title.style.marginBottom = '30px';
+            title.innerHTML = `
+                <div style="font-size: 48px; font-weight: 700; color: #4A1DC0; margin-bottom: 10px;">
+                    My Top ${count} Albums of ${currentFilter}
+                </div>
+            `;
+            wrapper.appendChild(title);
 
-// Clone the grid
-const gridClone = grid.cloneNode(true);
-gridClone.style.backgroundColor = 'transparent';
+            // Clone the grid
+            const gridClone = grid.cloneNode(true);
+            gridClone.style.backgroundColor = 'transparent';
 
-// 🔒 FORCE 5-COLUMN GRID (BELT + SUSPENDERS)
-gridClone.style.gridTemplateColumns = 'repeat(5, 1fr)';
+            // 🔒 FORCE 5-COLUMN GRID (BELT + SUSPENDERS)
+            gridClone.style.gridTemplateColumns = 'repeat(5, 1fr)';
 
-wrapper.appendChild(gridClone);
+            wrapper.appendChild(gridClone);
 
             
             // Add watermark
