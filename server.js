@@ -942,7 +942,7 @@ app.get('/api/top-albums', async (req, res) => {
     console.log('  🔍 Initial params:', params.length);
 
     if (year) {
-      query += ` AND ag.release_year = ${pIdx} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year = $${pIdx} AND ag.release_year IS NOT NULL`;
       params.push(year);
       pIdx++;
     } 
@@ -950,18 +950,18 @@ app.get('/api/top-albums', async (req, res) => {
       const start = decade || yearStart;
       const end = decade ? (decade + 9) : yearEnd;
       
-      query += ` AND ag.release_year BETWEEN ${pIdx} AND ${pIdx + 1} AND ag.release_year IS NOT NULL`;
+      query += ` AND ag.release_year BETWEEN $${pIdx} AND $${pIdx + 1} AND ag.release_year IS NOT NULL`;
       params.push(start, end);
       pIdx += 2;
     }
 
     if (artist) {
-      query += ` AND (LOWER(ag.artist_name) LIKE ${pIdx} OR LOWER(ag.canonical_artist) LIKE ${pIdx + 1})`;
+      query += ` AND (LOWER(ag.artist_name) LIKE $${pIdx} OR LOWER(ag.canonical_artist) LIKE $${pIdx + 1})`;
       params.push(`%${artist}%`, `%${artist}%`);
       pIdx += 2;
     }
 
-    query += ` ORDER BY ua.playcount DESC LIMIT ${pIdx}`;
+    query += ` ORDER BY ua.playcount DESC LIMIT $${pIdx}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
@@ -1052,12 +1052,12 @@ app.get('/api/albums/all', async (req, res) => {
     let paramIndex = 1;
 
     if (year) {
-      query += ` WHERE release_year = ${paramIndex}`;
+      query += ` WHERE release_year = $${paramIndex}`;
       params.push(year);
       paramIndex++;
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT ${paramIndex}`;
+    query += ` ORDER BY updated_at DESC LIMIT $${paramIndex}`;
     params.push(limit);
 
     const albums = await dbQuery(query, params);
