@@ -403,6 +403,7 @@ async function getMusicBrainzData(artist, album) {
 
         return titleSim > 0.3;
       })
+
       .map(rg => {
         const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
         const primaryType = rg['primary-type']?.toLowerCase() || null;
@@ -417,30 +418,72 @@ async function getMusicBrainzData(artist, album) {
         const artistSimilarity = stringSimilarity(artist, rgArtist);
         const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
         
-        let score = (artistSimilarity * 400) + (titleSimilarity * 200);
+        // 1. Base Weighting (Title is King)
+        let score = (artistSimilarity * 300) + (titleSimilarity * 500);
 
+        // 2. Various Artists & Soundtrack Logic
         if (normInput === 'various artists' || normRg.includes('various artists')) {
           if (secondaryTypes.includes('soundtrack')) score += 400;
           if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
         }
 
+        // 3. Core Title Veto (The Hamilton / In the Heights Fix)
+        const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
+        const coreRgTitle = rg.title.split(/[(\-:]/)[0].trim().toLowerCase();
+        if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
+            score -= 600; 
+        }
+
+        // 4. Word Count Penalty (The Snoop Dogg "Doggystyle" Fix)
+        const searchWords = normTitleSearch.split(' ').length;
+        const mbWords = normTitleMB.split(' ').length;
+        if (mbWords > searchWords + 3) {
+            score -= 400;
+        }
+
+        // 5. Budget/Sampler Detector (The Charlie Brown Fix)
         const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of', 'selections from', 'sampler'];
-        if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) score -= 800;
+        if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) {
+            score -= 800;
+        }
 
-        if (rg.title.length > cleanedAlbum.length + 5 && !budgetKeywords.some(word => normTitleMB.includes(word))) score -= 300;
-        if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
+        // 6. Length and Inclusion Match
+        if (rg.title.length > cleanedAlbum.length + 5 && !budgetKeywords.some(word => normTitleMB.includes(word))) {
+            score -= 300;
+        }
+        if (normRg.includes(normInput) || normInput.includes(normRg)) {
+            score += 200;
+        }
         
+        // 7. Type Boosts (The Calvin Harris "Studio Album" Fix)
         if (primaryType === 'album') score += 150;
-        if (normTitleMB === normTitleSearch) score += 200;
+        if (primaryType === 'album' && secondaryTypes.length === 0) {
+            score += 300; // Extra boost for a clean studio album
+        }
 
+        // 8. Exact Match Bonuses
+        if (normTitleMB === normTitleSearch) {
+            score += 500; // Increased from 200 to ensure "x" or "Animal" wins
+        }
+
+        // 9. General Quality Penalties
         const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
-        if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) score -= 500;
+        if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) {
+            score -= 500;
+        }
 
+        // FINAL STEP: Return the object with the calculated score
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
-        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
-        if (a.score > 600 && b.score > 600) return a.year - b.year;
+        // If one score is vastly superior, take it.
+        if (Math.abs(a.score - b.score) > 150) {
+            return b.score - a.score;
+        }
+        // If scores are close, prioritize the original/oldest release.
+        if (a.score > 600 && b.score > 600) {
+            return a.year - b.year;
+        }
         return b.score - a.score;
       });
 
