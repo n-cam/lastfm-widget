@@ -310,14 +310,13 @@ function stringSimilarity(str1, str2) {
   return jaccard * 0.7 + lengthRatio * 0.3;
 }
 
+// Add this helper function before buildSearchQueries
 function toTitleCase(str) {
-  // Normalize to title case for consistent storage
   if (!str) return str;
   return str
     .toLowerCase()
     .split(' ')
     .map((word, index) => {
-      // Keep certain words lowercase (but always capitalize first word)
       const lowercase = ['a', 'an', 'the', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'from'];
       if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1);
       return lowercase.includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1);
@@ -328,58 +327,53 @@ function toTitleCase(str) {
 function buildSearchQueries(artist, album) {
   const queries = [];
   
-  // Query 1: Exact artist + album (most specific)
+  // Query 1: Most specific - exact artist + album
   queries.push(`releasegroup:"${album}" AND artist:"${artist}"`);
   
-  // Query 2: If album has special chars, try without them
+  // Query 2: Try without special characters if present
   const albumNoSpecial = album.replace(/[^a-zA-Z0-9\s]/g, '');
   if (albumNoSpecial !== album && albumNoSpecial.length > 0) {
     queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artist}"`);
   }
   
-  // Query 3: For very short titles (like "x"), be more specific
+  // Query 3: For very short titles, use release search
   if (album.length <= 3) {
     queries.push(`release:"${album}" AND artist:"${artist}"`);
   }
   
-  // Query 4: Fallback to album-only for rare cases
-  queries.push(`releasegroup:"${album}"`);
-  
-  // Query 5: Artist-only as last resort
-  queries.push(`artist:"${artist}"`);
-  
+  // Stop here - don't do broad searches that cause bad matches
   return queries;
 }
 
 function validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim) {
-  // Direct match in any credited artist
-  const isDirectMatch = allArtists.some(a => 
-    a.includes(normInput) || 
-    normInput.includes(a) ||
-    a === normInput
-  );
+  // STRICT: Exact match in any credited artist
+  const isExactMatch = allArtists.some(a => a === normInput);
+  if (isExactMatch) return true;
   
-  // Handle "The" prefix variations (The Beatles vs Beatles)
+  // STRICT: Very close substring match
+  const isSubstringMatch = allArtists.some(a => 
+    (a.includes(normInput) && normInput.length > 3) || 
+    (normInput.includes(a) && a.length > 3)
+  );
+  if (isSubstringMatch) return true;
+  
+  // Handle "The" prefix variations
   const inputNoThe = normInput.replace(/^the\s+/, '');
   const rgNoThe = normRgMain.replace(/^the\s+/, '');
-  const isRebrand = rgNoThe.includes(inputNoThe) || inputNoThe.includes(rgNoThe);
+  if (inputNoThe === rgNoThe && inputNoThe.length > 0) return true;
   
-  // Various Artists / Soundtrack exception
+  // Various Artists / Soundtrack exception (STRICT title match required)
   const isVAException = (
     normRgMain.includes('various artists') || 
     searchTitleLower.includes('cast') ||
     searchTitleLower.includes('soundtrack')
-  ) && titleSim > 0.8;
+  ) && titleSim > 0.9; // Increased from 0.8
+  if (isVAException) return true;
   
-  // STRICT: If none of these pass AND similarity is low, reject
-  if (!isDirectMatch && !isRebrand && !isVAException) {
-    // Allow if artist similarity is very high (>0.85)
-    if (artistSim < 0.85) {
-      return false;
-    }
-  }
+  // STRICT: Only allow high similarity if no exact match
+  if (artistSim >= 0.95) return true; // Increased from 0.85
   
-  return true;
+  return false;
 }
 
 function calculateMatchScore(
@@ -395,56 +389,53 @@ function calculateMatchScore(
   primaryType,
   secondaryTypes
 ) {
-  // 1. INCREASED artist weight (was 300, now 400)
-  let score = (artistSimilarity * 400) + (titleSimilarity * 500);
+  // MASSIVELY INCREASED artist weight
+  let score = (artistSimilarity * 600) + (titleSimilarity * 500);
 
-  // 2. VETO: Wrong core title
+  // VETO: Artist mismatch is fatal
+  if (artistSimilarity < 0.7) score -= 2000;
+  
+  // VETO: Wrong core title
   const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
   const coreRgTitle = rgTitle.split(/[(\-:]/)[0].trim().toLowerCase();
   if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
-    score -= 700; 
+    score -= 1000; 
   }
 
-  // 3. VETO: EP vs Full Album
-  if ((primaryType === 'ep' || primaryType === 'single') && normTitleMB !== normTitleSearch) {
-    score -= 600;
-  }
+  // MASSIVE BONUS: Exact title match
+  if (normTitleMB === normTitleSearch) score += 1000;
 
-  // 4. Various Artists / Soundtracks
-  if (normInput === 'various artists' || normRg.includes('various artists')) {
-    if (secondaryTypes.includes('soundtrack')) score += 400;
-    if (rgTitle.length > cleanedAlbum.length + 12) score -= 500;
-  }
+  // VETO: Singles and EPs unless exact title match
+  if (primaryType === 'single' && normTitleMB !== normTitleSearch) score -= 1500;
+  if (primaryType === 'ep' && normTitleMB !== normTitleSearch) score -= 800;
 
-  // 5. Word Count Penalty
+  // PREFER: Albums over everything
+  if (primaryType === 'album') score += 500;
+  if (primaryType === 'album' && secondaryTypes.length === 0) score += 300;
+
+  // Word Count Penalty (verbose titles)
   const searchWords = normTitleSearch.split(' ').length;
   const mbWords = normTitleMB.split(' ').length;
-  if (mbWords > searchWords + 3) score -= 400;
+  if (mbWords > searchWords + 2) score -= 600; // Stricter
 
-  // 6. Quality Checks
-  const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of', 'selections from', 'sampler'];
-  if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) score -= 800;
+  // VETO: Quality issues
+  const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'covers of', 'sampler', 'samples', 'mixtape', 'liners'];
+  if (budgetKeywords.some(word => normTitleMB.includes(word))) score -= 1500;
 
-  const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
-  if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) score -= 500;
+  const badTypes = ['live', 'demo', 'remix', 'dj-mix', 'compilation'];
+  if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) {
+    score -= 800;
+  }
 
-  // 7. Length penalty
-  if (rgTitle.length > cleanedAlbum.length + 5) score -= 300;
+  // Length penalty
+  if (rgTitle.length > cleanedAlbum.length + 10) score -= 500;
   
-  // 8. Artist match bonuses
-  if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
-  if (normRg === normInput) score += 300;
-  
-  // 9. FINAL BONUSES
-  if (primaryType === 'album') score += 150;
-  if (primaryType === 'album' && secondaryTypes.length === 0) score += 300; 
-  if (normTitleMB === normTitleSearch) score += 600;
+  // Artist bonuses
+  if (normRg === normInput) score += 500; // Exact artist match
+  else if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
 
   return score;
 }
-
-
-// Replace your getMusicBrainzData function with this version that includes debug logging
 
 async function getMusicBrainzData(artist, album) {
   const cleanedAlbum = cleanAlbumName(album);
@@ -455,17 +446,17 @@ async function getMusicBrainzData(artist, album) {
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
     if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
-        return { 
-          canonical_name: toTitleCase(cleanedAlbum), 
-          canonical_artist: toTitleCase(cleanedArtist), 
-          musicbrainz_id: null, 
-          release_year: null, 
-          type: 'Unknown' 
-        };
+      return { 
+        canonical_name: toTitleCase(cleanedAlbum), 
+        canonical_artist: toTitleCase(cleanedArtist), 
+        release_year: null, 
+        musicbrainz_id: null, 
+        type: 'Unknown' 
+      };
     }
   }
 
-  const DEBUG = false; // Set to true to see detailed matching info
+  const DEBUG = false;
   if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
 
   try {
@@ -494,75 +485,58 @@ async function getMusicBrainzData(artist, album) {
         allCandidates.push(...data['release-groups']);
         if (data['release-groups'][0].score === 100) break;
         if (allCandidates.length >= 25) break;
-      } else {
-        if (DEBUG) console.log(`  ⚠️ No results for this query`);
       }
     }
     
     if (allCandidates.length === 0) {
-      if (DEBUG) console.log(`  ❌ No candidates found at all`);
+      if (DEBUG) console.log(`  ❌ No candidates found`);
       throw new Error("No candidates found");
     }
-    
-    if (DEBUG) console.log(`\n  📊 Total candidates: ${allCandidates.length}`);
     
     const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
 
     const candidates = uniqueCandidates
       .filter(rg => {
-        if (!rg['first-release-date']) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - no release date`);
-          return false;
-        }
+        if (!rg['first-release-date']) return false;
 
         const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
         const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
         const normInput = normalizeForComparison(artist);
         const normRgMain = normalizeForComparison(rgArtistMain);
         
-        const rgTitleLower = rg.title.toLowerCase();
-        const searchTitleLower = cleanedAlbum.toLowerCase();
         const titleSim = stringSimilarity(cleanedAlbum, rg.title);
         const artistSim = stringSimilarity(artist, rgArtistMain);
 
-        // ENHANCED ARTIST VALIDATION
-        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim);
+        // STRICT ARTIST VALIDATION
+        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, cleanedAlbum.toLowerCase(), titleSim);
         if (!artistMatch) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" by "${rgArtistMain}" - artist mismatch (sim: ${artistSim.toFixed(2)})`);
+          if (DEBUG) console.log(`  ❌ "${rg.title}" by "${rgArtistMain}" - artist fail (${artistSim.toFixed(2)})`);
           return false;
         }
 
-        // SHORT TITLE PROTECTION
+        // STRICT TITLE THRESHOLD - increased from 0.3 to 0.6
+        if (titleSim < 0.6) {
+          if (DEBUG) console.log(`  ❌ "${rg.title}" - title too different (${titleSim.toFixed(2)})`);
+          return false;
+        }
+
+        // Short title protection
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
-        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - short title protection`);
-          return false;
-        }
+        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
 
-        // LIVE REJECTION
+        // Live/Remix rejection
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
-        const isExplicitlyLive = secondaryTypes.includes('live');
-        const liveKeywords = ['live', 'session', 'unplugged', 'concert', 'at the'];
-        const userWantsLive = liveKeywords.some(word => searchTitleLower.includes(word));
-        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - unwanted live album`);
-          return false;
-        }
+        const searchTitleLower = cleanedAlbum.toLowerCase();
+        
+        const isLive = secondaryTypes.includes('live');
+        const userWantsLive = ['live', 'session', 'unplugged', 'concert'].some(w => searchTitleLower.includes(w));
+        if (isLive && !userWantsLive) return false;
 
-        // REMIX REJECTION
-        const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
-        if (isRemix && !searchTitleLower.includes('remix')) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - unwanted remix`);
-          return false;
-        }
+        const isRemix = secondaryTypes.includes('remix') || rg.title.toLowerCase().includes('remix');
+        if (isRemix && !searchTitleLower.includes('remix')) return false;
 
-        if (titleSim <= 0.3) {
-          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - title similarity too low (${titleSim.toFixed(2)})`);
-          return false;
-        }
-
-        if (DEBUG) console.log(`  ✓ Accepted "${rg.title}" by "${rgArtistMain}" (title: ${titleSim.toFixed(2)}, artist: ${artistSim.toFixed(2)})`);
+        if (DEBUG) console.log(`  ✓ "${rg.title}" by "${rgArtistMain}" (T:${titleSim.toFixed(2)} A:${artistSim.toFixed(2)})`);
         return true;
       })
       .map(rg => {
@@ -575,40 +549,30 @@ async function getMusicBrainzData(artist, album) {
         const normInput = normalizeForComparison(artist);
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
-        const searchTitleLower = cleanedAlbum.toLowerCase();
 
         const artistSimilarity = stringSimilarity(artist, rgArtist);
         const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
         
         const score = calculateMatchScore(
-          artistSimilarity, 
-          titleSimilarity, 
-          cleanedAlbum, 
-          rg.title,
-          normInput,
-          normRg,
-          normTitleMB,
-          normTitleSearch,
-          searchTitleLower,
-          primaryType,
-          secondaryTypes
+          artistSimilarity, titleSimilarity, cleanedAlbum, rg.title,
+          normInput, normRg, normTitleMB, normTitleSearch,
+          cleanedAlbum.toLowerCase(), primaryType, secondaryTypes
         );
 
-        if (DEBUG) console.log(`    Score: ${score.toFixed(0)} - "${rg.title}" (${year}) [${primaryType}]`);
-
+        if (DEBUG) console.log(`    Score: ${score} - "${rg.title}" (${year}) [${primaryType}]`);
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
         if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
-        if (a.score > 600 && b.score > 600) return a.year - b.year;
+        if (a.score > 800 && b.score > 800) return a.year - b.year;
         return b.score - a.score;
       });
 
     if (DEBUG && candidates.length > 0) {
-      console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - Score: ${candidates[0].score.toFixed(0)}`);
+      console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - ${candidates[0].score}`);
     }
 
-    if (candidates.length > 0) {
+    if (candidates.length > 0 && candidates[0].score > 400) { // MINIMUM SCORE THRESHOLD
       const best = candidates[0];
       const result = {
         musicbrainz_id: best.id,
@@ -617,13 +581,175 @@ async function getMusicBrainzData(artist, album) {
         canonical_name: toTitleCase(best.title),
         canonical_artist: toTitleCase(best.rgArtist)
       };
-
       mbGlobalCache.set(cacheKey, result);
       return result;
     }
     
-    if (DEBUG) console.log(`  ❌ No candidates passed filters`);
-    throw new Error("No suitable candidates found");
+    throw new Error(`No high-quality match (best score: ${candidates[0]?.score || 0})`);
+
+  } catch (err) {
+    console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
+    mbFailureCache.set(cacheKey, Date.now());
+    return { 
+      canonical_name: toTitleCase(cleanedAlbum), 
+      canonical_artist: toTitleCase(cleanedArtist), 
+      musicbrainz_id: null, 
+      release_year: null, 
+      type: 'Unknown' 
+    };
+  }
+}
+
+
+async function getMusicBrainzData(artist, album) {
+  const cleanedAlbum = cleanAlbumName(album);
+  const cleanedArtist = cleanArtistName(artist);
+  const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
+  
+  if (mbGlobalCache.has(cacheKey)) return mbGlobalCache.get(cacheKey);
+  if (mbFailureCache.has(cacheKey)) {
+    const failTime = mbFailureCache.get(cacheKey);
+    if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
+      return { 
+        canonical_name: toTitleCase(cleanedAlbum), 
+        canonical_artist: toTitleCase(cleanedArtist), 
+        release_year: null, 
+        musicbrainz_id: null, 
+        type: 'Unknown' 
+      };
+    }
+  }
+
+  const DEBUG = false;
+  if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
+
+  try {
+    const queries = buildSearchQueries(cleanedArtist, cleanedAlbum);
+    
+    let allCandidates = [];
+    for (const queryString of queries) {
+      const query = encodeURIComponent(queryString);
+      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=15`;
+      
+      if (DEBUG) console.log(`  📡 Query: ${queryString}`);
+      
+      await new Promise(resolve => setTimeout(resolve, 1100)); 
+      const response = await fetch(mbUrl, {
+        headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )` }
+      });
+      
+      if (!response.ok) {
+        if (DEBUG) console.log(`  ❌ Query failed: ${response.status}`);
+        continue;
+      }
+      
+      const data = await response.json();
+      if (data['release-groups'] && data['release-groups'].length > 0) {
+        if (DEBUG) console.log(`  ✓ Found ${data['release-groups'].length} candidates`);
+        allCandidates.push(...data['release-groups']);
+        if (data['release-groups'][0].score === 100) break;
+        if (allCandidates.length >= 25) break;
+      }
+    }
+    
+    if (allCandidates.length === 0) {
+      if (DEBUG) console.log(`  ❌ No candidates found`);
+      throw new Error("No candidates found");
+    }
+    
+    const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
+
+    const candidates = uniqueCandidates
+      .filter(rg => {
+        if (!rg['first-release-date']) return false;
+
+        const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
+        const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
+        const normInput = normalizeForComparison(artist);
+        const normRgMain = normalizeForComparison(rgArtistMain);
+        
+        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
+        const artistSim = stringSimilarity(artist, rgArtistMain);
+
+        // STRICT ARTIST VALIDATION
+        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, cleanedAlbum.toLowerCase(), titleSim);
+        if (!artistMatch) {
+          if (DEBUG) console.log(`  ❌ "${rg.title}" by "${rgArtistMain}" - artist fail (${artistSim.toFixed(2)})`);
+          return false;
+        }
+
+        // STRICT TITLE THRESHOLD - increased from 0.3 to 0.6
+        if (titleSim < 0.6) {
+          if (DEBUG) console.log(`  ❌ "${rg.title}" - title too different (${titleSim.toFixed(2)})`);
+          return false;
+        }
+
+        // Short title protection
+        const normTitleMB = normalizeForComparison(rg.title);
+        const normTitleSearch = normalizeForComparison(cleanedAlbum);
+        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
+
+        // Live/Remix rejection
+        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+        const searchTitleLower = cleanedAlbum.toLowerCase();
+        
+        const isLive = secondaryTypes.includes('live');
+        const userWantsLive = ['live', 'session', 'unplugged', 'concert'].some(w => searchTitleLower.includes(w));
+        if (isLive && !userWantsLive) return false;
+
+        const isRemix = secondaryTypes.includes('remix') || rg.title.toLowerCase().includes('remix');
+        if (isRemix && !searchTitleLower.includes('remix')) return false;
+
+        if (DEBUG) console.log(`  ✓ "${rg.title}" by "${rgArtistMain}" (T:${titleSim.toFixed(2)} A:${artistSim.toFixed(2)})`);
+        return true;
+      })
+      .map(rg => {
+        const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
+        const primaryType = rg['primary-type']?.toLowerCase() || null;
+        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+        const rgArtist = rg['artist-credit']?.[0]?.name || "";
+
+        const normRg = normalizeForComparison(rgArtist);
+        const normInput = normalizeForComparison(artist);
+        const normTitleMB = normalizeForComparison(rg.title);
+        const normTitleSearch = normalizeForComparison(cleanedAlbum);
+
+        const artistSimilarity = stringSimilarity(artist, rgArtist);
+        const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
+        
+        const score = calculateMatchScore(
+          artistSimilarity, titleSimilarity, cleanedAlbum, rg.title,
+          normInput, normRg, normTitleMB, normTitleSearch,
+          cleanedAlbum.toLowerCase(), primaryType, secondaryTypes
+        );
+
+        if (DEBUG) console.log(`    Score: ${score} - "${rg.title}" (${year}) [${primaryType}]`);
+        return { ...rg, score, year, rgArtist };
+      })
+      .sort((a, b) => {
+        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
+        if (a.score > 800 && b.score > 800) return a.year - b.year;
+        return b.score - a.score;
+      });
+
+    if (DEBUG && candidates.length > 0) {
+      console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - ${candidates[0].score}`);
+    }
+
+    if (candidates.length > 0 && candidates[0].score > 400) { // MINIMUM SCORE THRESHOLD
+      const best = candidates[0];
+      const result = {
+        musicbrainz_id: best.id,
+        release_year: best.year,
+        type: best['primary-type'] || 'Album',
+        canonical_name: toTitleCase(best.title),
+        canonical_artist: toTitleCase(best.rgArtist)
+      };
+      mbGlobalCache.set(cacheKey, result);
+      return result;
+    }
+    
+    throw new Error(`No high-quality match (best score: ${candidates[0]?.score || 0})`);
 
   } catch (err) {
     console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
