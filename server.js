@@ -220,7 +220,6 @@ cron.schedule('0 3 * * 0', async () => {
 
 console.log('⏰ Cron job scheduled: Weekly updates every Sunday at 3am');
 
-// Move this OUTSIDE cleanAlbumName
 function cleanArtistName(name) {
   if (!name) return "";
   return name.trim();
@@ -229,23 +228,39 @@ function cleanArtistName(name) {
 function cleanAlbumName(name) {
   if (!name) return "";
 
-  // This regex matches trailing brackets containing keywords.
-  // We remove the 'g' flag and keep it simple.
-  const bracketRegex = /\s*[\(\[](?:Deluxe|Remastered|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty|Digital|LP|Version|Set|Box Set)[\)\]]$/i;
+  // 1. Remove specific years followed by "Remaster" (e.g., "2009 Remaster", "1994 Remastered")
+  const yearRemasterRegex = /\s*[\(\[]?\d{4}\s+Remaster(?:ed)?[\)\]]?/gi;
 
-  const dashRegex = /\s*-\s*(?:Deluxe|Remastered|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty|Digital|LP|Version|Set|Box Set)$/i;
+  // 2. Comprehensive list of "noise" tags found in brackets or after dashes
+  const noiseTerms = [
+    'Deluxe', 'Remastered', 'Remaster', 'Edition', 'Anniversary', 
+    'Expanded', 'Special', 'Bonus', 'Live', 'Explicit', 'Extended', 
+    'Target', 'Walmart', 'Japan', 'Import', 'Clean', 'Dirty', 
+    'Digital', 'LP', 'Version', 'Set', 'Box Set', 'Mono', 'Stereo',
+    'Reissue', 'Collector\'s', 'Standard', 'Super Deluxe'
+  ].join('|');
+
+  const bracketRegex = new RegExp(`\\s*[\\(\\[](?:${noiseTerms})[\\)\\]]`, 'gi');
+  const dashRegex = new RegExp(`\\s*-\\s*(?:${noiseTerms})`, 'gi');
 
   let cleaned = name;
-  
-  // We use a loop or call it twice to handle "Album (Live) [Remastered]"
-  // This ensures BOTH tags get stripped if they are both at the end.
   let prev;
+
   do {
     prev = cleaned;
-    cleaned = cleaned.replace(bracketRegex, '').replace(dashRegex, '').trim();
-  } while (cleaned !== prev);
+    
+    // Apply all cleaning rules
+    cleaned = cleaned
+      .replace(yearRemasterRegex, '') // Remove "2009 Remaster"
+      .replace(bracketRegex, '')      // Remove "(Deluxe Edition)"
+      .replace(dashRegex, '')         // Remove "- Remastered"
+      .replace(/\s+\(?(?:Mono|Stereo|Remaster(?:ed)?)\)?$/i, '') // Catch dangling terms
+      .trim();
+      
+  } while (cleaned !== prev); // Loop to catch nested tags like (Live) [Remaster]
 
-  return cleaned;
+  // Final safety: if cleaning leaves us with an empty string (rare), return original
+  return cleaned || name;
 }
 
 function normalizeForComparison(str) {
@@ -304,11 +319,12 @@ async function getMusicBrainzData(artist, album) {
   }
 
   try {
-    const queries = [
-      `release:"${album}" AND artist:"${artist}"`,
-      `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`,
-      `${cleanedAlbum} ${cleanedArtist}`
-    ];
+    // Prioritize the CLEANED names so MusicBrainz looks for the original "Release Group"
+      const queries = [
+        `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // CLEANED FIRST
+        `${cleanedAlbum} ${cleanedArtist}`,                       // BROAD SEARCH SECOND
+        `release:"${album}" AND artist:"${artist}"`               // RAW AS LAST RESORT
+      ];
     
     let allCandidates = [];
     
