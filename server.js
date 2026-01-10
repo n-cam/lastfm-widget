@@ -361,11 +361,15 @@ async function getMusicBrainzData(artist, album) {
           const rgArtist = rg['artist-credit'][0].name;
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           
-          // 🛑 HARD STOP: If the artist similarity is less than 80%, 
-          // and it's not an exact name match, kill it immediately.
-          const isExactArtist = normalizeForComparison(rgArtist) === normalizeForComparison(artist);
-          if (artistSimilarity < 0.8 && !isExactArtist) {
-            return false;
+          // 🚀 IMPROVED FILTER: Check similarity AND normalized strings
+          const normRgArtist = normalizeForComparison(rgArtist);
+          const normInputArtist = normalizeForComparison(artist);
+          
+          // Allow if: Exact match OR very high similarity OR one contains the other (e.g., "Ms. Lauryn Hill" vs "Lauryn Hill")
+          const isBasicallySame = normRgArtist.includes(normInputArtist) || normInputArtist.includes(normRgArtist);
+          
+          if (artistSimilarity < 0.5 && !isBasicallySame) {
+            return false; 
           }
           
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
@@ -373,6 +377,7 @@ async function getMusicBrainzData(artist, album) {
           
           return true;
         })
+        
         .map(rg => {
           const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
           const primaryType = rg['primary-type']?.toLowerCase() || null;
