@@ -264,15 +264,29 @@ function cleanAlbumName(name) {
 }
 
 function normalizeForComparison(str) {
+  if (!str) return '';
   try {
     return str.toLowerCase()
+      // 1. Standardize "Fancy" characters first
+      .replace(/[×✕✖]/g, 'x')      // Fixes Chloe × Halle
+      .replace(/[‐‑‒–—]/g, '-')    // Fixes alt‐J (standardizes all dashes)
+      .replace(/[‘’]/g, "'")       // Standardizes curly apostrophes
+      
+      // 2. Decompose accents (e.g., "é" becomes "e" + accent mark)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\p{L}\p{N}]/gu, '')
+      
+      // 3. Keep ONLY letters and numbers
+      // We use \s to keep spaces temporarily to avoid "alt-J" becoming "altj" 
+      // which can mess up word-split logic later.
+      .replace(/[^\p{L}\p{N}\s]/gu, '') 
+      .replace(/\s+/g, ' ')        // Collapse multiple spaces
       .trim();
   } catch (e) {
+    // Fallback for older environments
     return str.toLowerCase()
-      .replace(/[^a-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/gi, '')
+      .replace(/[×✕✖]/g, 'x')
+      .replace(/[^a-z0-9]/gi, '')
       .trim();
   }
 }
