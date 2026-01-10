@@ -83,9 +83,9 @@ async function initDatabase() {
         canonical_artist TEXT NOT NULL,
         album_name TEXT NOT NULL,
         artist_name TEXT NOT NULL,
+        release_year INTEGER,
         is_manual BOOLEAN DEFAULT FALSE, 
         musicbrainz_id TEXT,
-        release_year INTEGER,
         image_url TEXT,
         lastfm_url TEXT,
         album_type TEXT,
@@ -358,37 +358,33 @@ async function getMusicBrainzData(artist, album) {
             const rgTitleLower = rg.title.toLowerCase();
             const searchTitleLower = cleanedAlbum.toLowerCase();
 
-            // --- SHIELD 1: THE COLLABORATION & HALLUCINATION GATEKEEPER ---
-            // Fixes: Bruno Mars vs Silk Sonic AND Bruno Mars vs Dub Tractor
+            // --- SHIELD 1: THE ARTIST GATEKEEPER ---
             const inputWords = normInput.split(' ');
             const matchesAllWords = inputWords.every(word => normRg.includes(word));
             const artistSim = stringSimilarity(artist, rgArtist);
-
-            // If the words don't match (Dub Tractor) AND similarity is low, REJECT.
             if (!matchesAllWords && artistSim < 0.4) return false;
 
-            // --- SHIELD 2: SHORT TITLE PROTECTION ---
-            // Fixes: Ed Sheeran "x" vs Remixes
-            // If title is 2 chars or less, we require the artist to be a substring match.
-            if (cleanedAlbum.length < 3 && !normRg.includes(normInput)) return false;
+            // --- SHIELD 2: SHORT TITLE PROTECTION (The Ed Sheeran Fix) ---
+            // If title is <= 2 chars (like "x", "v", "5"), we require the MB title 
+            // to be an EXACT match to your search title. This kills "Don't (remix)".
+            if (cleanedAlbum.length <= 2 && rgTitleLower !== searchTitleLower) {
+              return false;
+            }
 
-            // --- SHIELD 3: SMART LIVE/SESSION REJECTION ---
-            // Fixes: Mother Mother "O My Heart" vs "Live Sessions"
+            // --- SHIELD 3: LIVE REJECTION ---
             const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
             const isExplicitlyLive = secondaryTypes.includes('live');
             const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
-
-            // If MB says it's Live, but your search didn't ask for Live, and it's longer... REJECT.
             if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
               return false;
             }
 
-            // --- SHIELD 4: BASIC SIMILARITY ---
-            // Keep your existing title similarity check as a final safety.
-            const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-            if (titleSimilarity < 0.3) return false;
+            // --- SHIELD 4: REMIX REJECTION ---
+            // If you didn't ask for a remix, but MB says it's a remix, reject it.
+            const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
+            if (isRemix && !searchTitleLower.includes('remix')) return false;
 
-            return true;
+            return stringSimilarity(cleanedAlbum, rg.title) > 0.3;
           })
 
         .map(rg => {
