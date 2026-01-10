@@ -251,8 +251,8 @@
                 const card = document.createElement('div');
                 card.className = 'album-card';
                 
-                const albumName = album.name || album.album_name || album.canonical_album || 'Unknown Album';
-                const artistName = album.artist || album.artist_name || album.canonical_artist || 'Unknown Artist';
+                const albumName = album.album_name || album.canonical_album || album.name || 'Unknown Album';
+                const artistName = album.artist_name || album.canonical_artist || album.artist || 'Unknown Artist';
                 const imageUrl = album.image || album.image_url || '';
                 const albumUrl = album.url || album.lastfm_url || '#';
                 

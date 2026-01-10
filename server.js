@@ -1067,8 +1067,8 @@ app.get('/api/top-albums', async (req, res) => {
         
         if (shouldInclude) {
           processedAlbums.push({
-            name: mbData.canonical_name || a.name,
-            artist: mbData.canonical_artist || a.artist.name,
+            name: a.name,  // ✅ CORRECT - original Last.fm name
+            artist: a.artist.name,  // ✅ CORRECT - original Last.fm artist
             playcount: parseInt(a.playcount),
             url: a.url,
             image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
@@ -1188,8 +1188,8 @@ app.get('/api/top-albums', async (req, res) => {
       filters: { year, decade, yearStart, yearEnd, artist },
       count: albums.length,
       albums: albums.map(a => ({
-        name: a.canonical_album || a.album_name,
-        artist: a.canonical_artist || a.artist_name,
+        name: a.album_name || a.canonical_album,  
+        artist: a.artist_name || a.canonical_artist,  
         playcount: a.playcount,
         url: a.lastfm_url,
         image: a.image_url,
