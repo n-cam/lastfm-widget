@@ -319,16 +319,13 @@ async function getMusicBrainzData(artist, album) {
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
     if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
-        return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, release_year: null, musicbrainz_id: null, type: 'Unknown' };
+      return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, release_year: null, musicbrainz_id: null, type: 'Unknown' };
     }
   }
 
   try {
-    const queries = [
-    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
-    `releasegroup:"${cleanedAlbum}"`, // NEW: Search by title alone if artist+title fails
-    `artist:"${cleanedArtist}"`,     // For "x" and "Animal"
-];
+    // ENHANCED: Build smarter queries based on edge cases
+    const queries = buildSearchQueries(cleanedArtist, cleanedAlbum);
     
     let allCandidates = [];
     for (const queryString of queries) {
@@ -366,32 +363,204 @@ async function getMusicBrainzData(artist, album) {
         const titleSim = stringSimilarity(cleanedAlbum, rg.title);
         const artistSim = stringSimilarity(artist, rgArtistMain);
 
-        // --- SHIELD 1: ARTIST GATEKEEPER ---
-        const isDirectMatch = allArtists.some(a => a.includes(normInput) || normInput.includes(a));
-        const isRebrand = normRgMain.includes(normInput.replace('the ', '')) || normInput.includes(normRgMain.replace('the ', ''));
-        const isVAException = (normRgMain.includes('various artists') || searchTitleLower.includes('cast')) && titleSim > 0.8;
+        // --- ENHANCED ARTIST VALIDATION ---
+        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim);
+        if (!artistMatch) return false;
 
-        if (!isDirectMatch && !isRebrand && !isVAException && artistSim < 0.6) return false;
-        
-
-        // --- SHIELD 2: SHORT TITLE PROTECTION (Ed Sheeran) ---
+        // --- SHORT TITLE PROTECTION (Ed Sheeran "x") ---
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
         if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
 
-        // --- SHIELD 3: LIVE REJECTION ---
+        // --- LIVE/REMIX/SECONDARY TYPE REJECTION ---
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
         const isExplicitlyLive = secondaryTypes.includes('live');
         const liveKeywords = ['live', 'session', 'unplugged', 'concert', 'at the'];
         const userWantsLive = liveKeywords.some(word => searchTitleLower.includes(word));
         if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) return false;
 
-        // --- SHIELD 4: REMIX REJECTION ---
         const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
         if (isRemix && !searchTitleLower.includes('remix')) return false;
 
         return titleSim > 0.3;
       })
+      .map(rg => {
+        const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
+        const primaryType = rg['primary-type']?.toLowerCase() || null;
+        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+        const rgArtist = rg['artist-credit']?.[0]?.name || "";
+
+        const normRg = normalizeForComparison(rgArtist);
+        const normInput = normalizeForComparison(artist);
+        const normTitleMB = normalizeForComparison(rg.title);
+        const normTitleSearch = normalizeForComparison(cleanedAlbum);
+        const searchTitleLower = cleanedAlbum.toLowerCase();
+
+        const artistSimilarity = stringSimilarity(artist, rgArtist);
+        const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
+        
+        // Enhanced scoring
+        let score = calculateMatchScore(
+          artistSimilarity, 
+          titleSimilarity, 
+          cleanedAlbum, 
+          rg.title,
+          normInput,
+          normRg,
+          normTitleMB,
+          normTitleSearch,
+          searchTitleLower,
+          primaryType,
+          secondaryTypes
+        );
+
+        return { ...rg, score, year, rgArtist };
+      })
+      .sort((a, b) => {
+        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
+        if (a.score > 600 && b.score > 600) return a.year - b.year;
+        return b.score - a.score;
+      });
+
+    if (candidates.length > 0) {
+      const best = candidates[0];
+      const result = {
+        musicbrainz_id: best.id,
+        release_year: best.year,
+        type: best['primary-type'] || 'Album',
+        canonical_name: best.title,
+        canonical_artist: best.rgArtist
+      };
+      mbGlobalCache.set(cacheKey, result);
+      return result;
+    }
+    throw new Error("No suitable candidates found");
+
+  } catch (err) {
+    console.error(`  ❌ MB Fail: ${cleanedAlbum} - ${err.message}`);
+    mbFailureCache.set(cacheKey, Date.now());
+    return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, musicbrainz_id: null, release_year: null, type: 'Unknown' };
+  }
+}
+
+// NEW: Smarter query builder for edge cases
+function buildSearchQueries(artist, album) {
+  const queries = [];
+  
+  // Query 1: Exact artist + album (most specific)
+  queries.push(`releasegroup:"${album}" AND artist:"${artist}"`);
+  
+  // Query 2: If album has special chars, try without them
+  const albumNoSpecial = album.replace(/[^a-zA-Z0-9\s]/g, '');
+  if (albumNoSpecial !== album) {
+    queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artist}"`);
+  }
+  
+  // Query 3: For very short titles (like "x"), be more specific
+  if (album.length <= 3) {
+    queries.push(`release:"${album}" AND artist:"${artist}"`);
+  }
+  
+  // Query 4: Fallback to album-only for rare cases
+  queries.push(`releasegroup:"${album}"`);
+  
+  return queries;
+}
+
+// NEW: Enhanced artist validation with stricter rules
+function validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim) {
+  // Direct match in any credited artist
+  const isDirectMatch = allArtists.some(a => 
+    a.includes(normInput) || 
+    normInput.includes(a) ||
+    a === normInput
+  );
+  
+  // Handle "The" prefix variations (The Beatles vs Beatles)
+  const inputNoThe = normInput.replace(/^the\s+/, '');
+  const rgNoThe = normRgMain.replace(/^the\s+/, '');
+  const isRebrand = rgNoThe.includes(inputNoThe) || inputNoThe.includes(rgNoThe);
+  
+  // Various Artists / Soundtrack exception
+  const isVAException = (
+    normRgMain.includes('various artists') || 
+    searchTitleLower.includes('cast') ||
+    searchTitleLower.includes('soundtrack')
+  ) && titleSim > 0.8;
+  
+  // STRICT: If none of these pass AND similarity is low, reject
+  if (!isDirectMatch && !isRebrand && !isVAException) {
+    // NEW: Allow if artist similarity is very high (>0.85) even without exact match
+    // This helps with romanization (Lee Jin Ah) and minor spelling differences
+    if (artistSim < 0.85) {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+// NEW: More sophisticated scoring with artist weight
+function calculateMatchScore(
+  artistSimilarity, 
+  titleSimilarity, 
+  cleanedAlbum, 
+  rgTitle,
+  normInput,
+  normRg,
+  normTitleMB,
+  normTitleSearch,
+  searchTitleLower,
+  primaryType,
+  secondaryTypes
+) {
+  // 1. INCREASED artist weight (was 300, now 400) to prevent wrong artist matches
+  let score = (artistSimilarity * 400) + (titleSimilarity * 500);
+
+  // 2. VETO: Wrong core title (Hamilton / In the Heights)
+  const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
+  const coreRgTitle = rgTitle.split(/[(\-:]/)[0].trim().toLowerCase();
+  if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
+    score -= 700; 
+  }
+
+  // 3. VETO: EP vs Full Album
+  if ((primaryType === 'ep' || primaryType === 'single') && normTitleMB !== normTitleSearch) {
+    score -= 600;
+  }
+
+  // 4. Various Artists / Soundtracks
+  if (normInput === 'various artists' || normRg.includes('various artists')) {
+    if (secondaryTypes.includes('soundtrack')) score += 400;
+    if (rgTitle.length > cleanedAlbum.length + 12) score -= 500;
+  }
+
+  // 5. Word Count Penalty (verbose titles)
+  const searchWords = normTitleSearch.split(' ').length;
+  const mbWords = normTitleMB.split(' ').length;
+  if (mbWords > searchWords + 3) score -= 400;
+
+  // 6. Quality Checks (Budget/Remix/Live)
+  const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of', 'selections from', 'sampler'];
+  if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) score -= 800;
+
+  const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
+  if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) score -= 500;
+
+  // 7. Length penalty for extraneous info
+  if (rgTitle.length > cleanedAlbum.length + 5) score -= 300;
+  
+  // 8. Artist match bonuses
+  if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
+  if (normRg === normInput) score += 300; // NEW: Exact artist match bonus
+  
+  // 9. FINAL BONUSES
+  if (primaryType === 'album') score += 150;
+  if (primaryType === 'album' && secondaryTypes.length === 0) score += 300; 
+  if (normTitleMB === normTitleSearch) score += 600;
+
+  return score;
+}
 
       .map(rg => {
         const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
