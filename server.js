@@ -267,20 +267,20 @@ function normalizeForComparison(str) {
   if (!str) return '';
   try {
     return str.toLowerCase()
-      // 1. Standardize "Fancy" characters first
-      .replace(/[×✕✖]/g, 'x')      // Fixes Chloe × Halle
-      .replace(/[‐‑‒–—]/g, '-')    // Fixes alt‐J (standardizes all dashes)
-      .replace(/[‘’]/g, "'")       // Standardizes curly apostrophes
+      // 1. Standardize "Stylized" and "Fancy" characters
+      .replace(/[×✕✖]/g, 'x')      // Fixes Ed Sheeran (×) and Chloe × Halle
+      .replace(/\$/g, 's')         // Fixes Ke$ha (Ke$ha -> kesha)
+      .replace(/[‐‑‒–—]/g, '-')    // Fixes alt‐J
+      .replace(/[‘’]/g, "'")       // Fixes curly apostrophes
       
-      // 2. Decompose accents (e.g., "é" becomes "e" + accent mark)
+      // 2. Decompose accents (é -> e)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       
-      // 3. Keep ONLY letters and numbers
-      // We use \s to keep spaces temporarily to avoid "alt-J" becoming "altj" 
-      // which can mess up word-split logic later.
+      // 3. Keep letters, numbers, and spaces
+      // Crucial: We keep spaces to avoid "Ke$ha" becoming "keha" if $ was stripped
       .replace(/[^\p{L}\p{N}\s]/gu, '') 
-      .replace(/\s+/g, ' ')        // Collapse multiple spaces
+      .replace(/\s+/g, ' ')
       .trim();
   } catch (e) {
     // Fallback for older environments
@@ -402,10 +402,17 @@ async function getMusicBrainzData(artist, album) {
         }
 
         // --- SHIELD 3: LIVE REJECTION ---
+        // --- SHIELD 3: LIVE REJECTION ---
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
         const isExplicitlyLive = secondaryTypes.includes('live');
-        const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
-        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) return false;
+
+        // Add "unplugged" to the keywords that signal the user WANTS a live album
+        const liveKeywords = ['live', 'session', 'unplugged', 'concert', 'at the'];
+        const userWantsLive = liveKeywords.some(word => searchTitleLower.includes(word));
+
+        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
+            return false;
+        }
 
         // --- SHIELD 4: REMIX REJECTION ---
         const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
