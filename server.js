@@ -429,6 +429,8 @@ function calculateMatchScore(
 }
 
 
+// Replace your getMusicBrainzData function with this version that includes debug logging
+
 async function getMusicBrainzData(artist, album) {
   const cleanedAlbum = cleanAlbumName(album);
   const cleanedArtist = cleanArtistName(artist);
@@ -442,6 +444,9 @@ async function getMusicBrainzData(artist, album) {
     }
   }
 
+  const DEBUG = false; // Set to true to see detailed matching info
+  if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
+
   try {
     const queries = buildSearchQueries(cleanedArtist, cleanedAlbum);
     
@@ -450,26 +455,44 @@ async function getMusicBrainzData(artist, album) {
       const query = encodeURIComponent(queryString);
       const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=15`;
       
+      if (DEBUG) console.log(`  📡 Query: ${queryString}`);
+      
       await new Promise(resolve => setTimeout(resolve, 1100)); 
       const response = await fetch(mbUrl, {
         headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )` }
       });
       
-      if (!response.ok) continue;
+      if (!response.ok) {
+        if (DEBUG) console.log(`  ❌ Query failed: ${response.status}`);
+        continue;
+      }
+      
       const data = await response.json();
       if (data['release-groups'] && data['release-groups'].length > 0) {
+        if (DEBUG) console.log(`  ✓ Found ${data['release-groups'].length} candidates`);
         allCandidates.push(...data['release-groups']);
         if (data['release-groups'][0].score === 100) break;
         if (allCandidates.length >= 25) break;
+      } else {
+        if (DEBUG) console.log(`  ⚠️ No results for this query`);
       }
     }
     
-    if (allCandidates.length === 0) throw new Error("No candidates found");
+    if (allCandidates.length === 0) {
+      if (DEBUG) console.log(`  ❌ No candidates found at all`);
+      throw new Error("No candidates found");
+    }
+    
+    if (DEBUG) console.log(`\n  📊 Total candidates: ${allCandidates.length}`);
+    
     const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
 
     const candidates = uniqueCandidates
       .filter(rg => {
-        if (!rg['first-release-date']) return false;
+        if (!rg['first-release-date']) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - no release date`);
+          return false;
+        }
 
         const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
         const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
@@ -483,25 +506,43 @@ async function getMusicBrainzData(artist, album) {
 
         // ENHANCED ARTIST VALIDATION
         const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim);
-        if (!artistMatch) return false;
+        if (!artistMatch) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" by "${rgArtistMain}" - artist mismatch (sim: ${artistSim.toFixed(2)})`);
+          return false;
+        }
 
         // SHORT TITLE PROTECTION
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
-        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
+        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - short title protection`);
+          return false;
+        }
 
         // LIVE REJECTION
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
         const isExplicitlyLive = secondaryTypes.includes('live');
         const liveKeywords = ['live', 'session', 'unplugged', 'concert', 'at the'];
         const userWantsLive = liveKeywords.some(word => searchTitleLower.includes(word));
-        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) return false;
+        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - unwanted live album`);
+          return false;
+        }
 
         // REMIX REJECTION
         const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
-        if (isRemix && !searchTitleLower.includes('remix')) return false;
+        if (isRemix && !searchTitleLower.includes('remix')) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - unwanted remix`);
+          return false;
+        }
 
-        return titleSim > 0.3;
+        if (titleSim <= 0.3) {
+          if (DEBUG) console.log(`  ❌ Rejected "${rg.title}" - title similarity too low (${titleSim.toFixed(2)})`);
+          return false;
+        }
+
+        if (DEBUG) console.log(`  ✓ Accepted "${rg.title}" by "${rgArtistMain}" (title: ${titleSim.toFixed(2)}, artist: ${artistSim.toFixed(2)})`);
+        return true;
       })
       .map(rg => {
         const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
@@ -532,6 +573,8 @@ async function getMusicBrainzData(artist, album) {
           secondaryTypes
         );
 
+        if (DEBUG) console.log(`    Score: ${score.toFixed(0)} - "${rg.title}" (${year}) [${primaryType}]`);
+
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
@@ -540,24 +583,36 @@ async function getMusicBrainzData(artist, album) {
         return b.score - a.score;
       });
 
+    if (DEBUG && candidates.length > 0) {
+      console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - Score: ${candidates[0].score.toFixed(0)}`);
+    }
+
     if (candidates.length > 0) {
       const best = candidates[0];
       const result = {
         musicbrainz_id: best.id,
         release_year: best.year,
         type: best['primary-type'] || 'Album',
-        canonical_name: best.title,
-        canonical_artist: best.rgArtist
+        canonical_name: toTitleCase(best.title),
+        canonical_artist: toTitleCase(best.rgArtist)
       };
       mbGlobalCache.set(cacheKey, result);
       return result;
     }
+    
+    if (DEBUG) console.log(`  ❌ No candidates passed filters`);
     throw new Error("No suitable candidates found");
 
   } catch (err) {
-    console.error(`  ❌ MB Fail: ${cleanedAlbum} - ${err.message}`);
+    console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
     mbFailureCache.set(cacheKey, Date.now());
-    return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, musicbrainz_id: null, release_year: null, type: 'Unknown' };
+    return { 
+      canonical_name: toTitleCase(cleanedAlbum), 
+      canonical_artist: toTitleCase(cleanedArtist), 
+      musicbrainz_id: null, 
+      release_year: null, 
+      type: 'Unknown' 
+    };
   }
 }
 
@@ -1208,6 +1263,65 @@ app.get('/api/proxy-image', async (req, res) => {
     res.send(buffer);
   } catch (err) {
     res.status(500).send('Proxy error');
+  }
+});
+
+// Add this endpoint to clean up existing duplicates
+app.get('/api/admin/merge-duplicates', async (req, res) => {
+  if (!req.query.confirm) {
+    return res.json({ 
+      message: 'This will merge duplicate albums with different cases. Add ?confirm=true to proceed.',
+      warning: 'This is a one-time operation'
+    });
+  }
+
+  try {
+    let mergedCount = 0;
+    
+    // Find all albums
+    const allAlbums = await dbQuery('SELECT * FROM albums_global ORDER BY id');
+    
+    // Group by normalized canonical name
+    const groups = new Map();
+    for (const album of allAlbums) {
+      const key = `${album.canonical_album.toLowerCase()}::${album.canonical_artist.toLowerCase()}`;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key).push(album);
+    }
+    
+    // Merge duplicates
+    for (const [key, albums] of groups) {
+      if (albums.length > 1) {
+        // Keep the one with musicbrainz_id if available, otherwise the oldest
+        const keeper = albums.find(a => a.musicbrainz_id) || albums[0];
+        const toMerge = albums.filter(a => a.id !== keeper.id);
+        
+        console.log(`Merging ${albums.length} versions of "${keeper.canonical_album}"`);
+        
+        for (const duplicate of toMerge) {
+          // Update user_albums to point to keeper
+          await dbRun(
+            `UPDATE user_albums SET album_id = $1 WHERE album_id = $2`,
+            [keeper.id, duplicate.id]
+          );
+          
+          // Delete duplicate
+          await dbRun('DELETE FROM albums_global WHERE id = $1', [duplicate.id]);
+          mergedCount++;
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      merged: mergedCount,
+      message: `Merged ${mergedCount} duplicate albums`
+    });
+  } catch (err) {
+    console.error('Merge error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
