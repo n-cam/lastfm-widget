@@ -394,7 +394,12 @@ async function getMusicBrainzData(artist, album) {
         // --- SHIELD 2: SHORT TITLE PROTECTION ---
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
-        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
+
+        // If the title is very short (x, v, 21), we require a normalized exact match.
+        // This handles 'x' vs '×' vs 'X' perfectly.
+        if (cleanedAlbum.length <= 3) {
+            if (normTitleMB !== normTitleSearch) return false;
+        }
 
         // --- SHIELD 3: LIVE REJECTION ---
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
@@ -432,11 +437,17 @@ async function getMusicBrainzData(artist, album) {
           if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
         }
 
-        // Budget/Parody Detector
-        const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of'];
+        // C. Budget/Parody/Sampler Detector
+        const budgetKeywords = [
+            'tribute', 'karaoke', 'instrumental', 'version of', 
+            'not so original', 'covers of', 'selections from', 'sampler'
+        ];
         const isBudgetMatch = budgetKeywords.some(word => normTitleMB.includes(word));
         const userWantsBudget = budgetKeywords.some(word => normTitleSearch.includes(word));
-        if (isBudgetMatch && !userWantsBudget) score -= 800;
+
+        if (isBudgetMatch && !userWantsBudget) {
+            score -= 800; // Nuclear penalty
+        }
 
         // Length/Inclusion Match
         if (rg.title.length > cleanedAlbum.length + 5 && !isBudgetMatch) score -= 300;
