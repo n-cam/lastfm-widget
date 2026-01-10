@@ -328,10 +328,11 @@ async function getMusicBrainzData(artist, album) {
   try {
     // 3. Search Strategy: release-group (Abstract Album) > release (Specific CD)
     const queries = [
-        `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
-        `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
-        `${cleanedAlbum} ${cleanedArtist}`
-    ];
+    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
+    `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
+    `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // New: check specific releases
+    `${cleanedAlbum} ${cleanedArtist}`
+];
     
     let allCandidates = [];
     
@@ -391,7 +392,12 @@ async function getMusicBrainzData(artist, album) {
         if (!isDirectMatch && !firstWordMatch && !isKnownCollab) return false;
 
         // --- SHIELD 2: SHORT TITLE PROTECTION ---
-        if (cleanedAlbum.length <= 3 && rgTitleLower !== searchTitleLower) return false;
+        const normTitleMB = normalizeForComparison(rg.title);
+        const normTitleSearch = normalizeForComparison(cleanedAlbum);
+
+        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) {
+            return false;
+        }
 
         // --- SHIELD 3: LIVE REJECTION ---
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
