@@ -350,42 +350,48 @@ async function getMusicBrainzData(artist, album) {
 
     const candidates = uniqueCandidates
         .filter(rg => {
-            if (!rg['first-release-date']) return false;
+    if (!rg['first-release-date']) return false;
 
-            const rgArtist = rg['artist-credit']?.[0]?.name || "";
-            const normRg = normalizeForComparison(rgArtist);
-            const normInput = normalizeForComparison(artist);
-            const rgTitleLower = rg.title.toLowerCase();
-            const searchTitleLower = cleanedAlbum.toLowerCase();
+          const rgArtist = rg['artist-credit']?.[0]?.name || "";
+          const normRg = normalizeForComparison(rgArtist);
+          const normInput = normalizeForComparison(artist);
+          const rgTitleLower = rg.title.toLowerCase();
+          const searchTitleLower = cleanedAlbum.toLowerCase();
 
-            // --- SHIELD 1: THE ARTIST GATEKEEPER ---
-            const inputWords = normInput.split(' ');
-            const matchesAllWords = inputWords.every(word => normRg.includes(word));
-            const artistSim = stringSimilarity(artist, rgArtist);
-            if (!matchesAllWords && artistSim < 0.4) return false;
+          // --- SHIELD 1: THE IRONCLAD ARTIST GATEKEEPER ---
+          // This combines the "Direct Match" and "First Word" logic into one check.
+          const isDirectMatch = normRg.includes(normInput) || normInput.includes(normRg);
+          
+          const firstWordInput = normInput.split(' ')[0];
+          const firstWordRg = normRg.split(' ')[0];
+          const firstWordMatch = firstWordInput === firstWordRg && firstWordInput.length > 2;
 
-            // --- SHIELD 2: SHORT TITLE PROTECTION (The Ed Sheeran Fix) ---
-            // If title is <= 2 chars (like "x", "v", "5"), we require the MB title 
-            // to be an EXACT match to your search title. This kills "Don't (remix)".
-            if (cleanedAlbum.length <= 2 && rgTitleLower !== searchTitleLower) {
+          // If it's not a direct match (Lauryn Hill/Silk Sonic) AND doesn't share a 
+          // unique first word, it's a hallucination (Maxh. vs Emdasche). REJECT.
+          if (!isDirectMatch && !firstWordMatch) return false;
+
+          // --- SHIELD 2: SHORT TITLE PROTECTION ---
+          // If title is <= 3 chars (x, v, 21), require an EXACT title match.
+          if (cleanedAlbum.length <= 3 && rgTitleLower !== searchTitleLower) {
               return false;
-            }
+          }
 
-            // --- SHIELD 3: LIVE REJECTION ---
-            const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
-            const isExplicitlyLive = secondaryTypes.includes('live');
-            const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
-            if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
+          // --- SHIELD 3: LIVE REJECTION ---
+          const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+          const isExplicitlyLive = secondaryTypes.includes('live');
+          const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
+          
+          if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
               return false;
-            }
+          }
 
-            // --- SHIELD 4: REMIX REJECTION ---
-            // If you didn't ask for a remix, but MB says it's a remix, reject it.
-            const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
-            if (isRemix && !searchTitleLower.includes('remix')) return false;
+          // --- SHIELD 4: REMIX REJECTION ---
+          const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
+          if (isRemix && !searchTitleLower.includes('remix')) return false;
 
-            return stringSimilarity(cleanedAlbum, rg.title) > 0.3;
-          })
+          // --- SHIELD 5: MINIMUM SIMILARITY ---
+          return stringSimilarity(cleanedAlbum, rg.title) > 0.3;
+      })
 
         .map(rg => {
           const year = parseInt(rg['first-release-date'].split('-')[0], 10);
