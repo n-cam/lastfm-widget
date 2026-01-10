@@ -83,6 +83,7 @@ async function initDatabase() {
         canonical_artist TEXT NOT NULL,
         album_name TEXT NOT NULL,
         artist_name TEXT NOT NULL,
+        is_manual BOOLEAN DEFAULT FALSE, 
         musicbrainz_id TEXT,
         release_year INTEGER,
         image_url TEXT,
@@ -125,6 +126,7 @@ async function initDatabase() {
         canonical_artist TEXT NOT NULL,
         album_name TEXT NOT NULL,
         artist_name TEXT NOT NULL,
+        is_manual INTEGER DEFAULT 0,
         musicbrainz_id TEXT,
         release_year INTEGER,
         image_url TEXT,
@@ -218,19 +220,32 @@ cron.schedule('0 3 * * 0', async () => {
 
 console.log('⏰ Cron job scheduled: Weekly updates every Sunday at 3am');
 
-function cleanAlbumName(name) {
-  return name
-    .replace(/\s*\(.*?(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty).*?\)/gi, '')
-    .replace(/\s*\[.*?(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty).*?\]/gi, '')
-    .replace(/\s*-\s*(Deluxe|Remaster|Edition|Anniversary|Expanded|Special|Bonus).*/gi, '')
-    .trim();
+// Move this OUTSIDE cleanAlbumName
+function cleanArtistName(name) {
+  if (!name) return "";
+  return name.trim();
 }
 
-function cleanArtistName(name) {
-  return name
-    .replace(/^(Ms\.?|Mr\.?|Mrs\.?|Dr\.?)\s+/i, '')
-    .replace(/^(The|A|An)\s+/i, '')
-    .trim();
+function cleanAlbumName(name) {
+  if (!name) return "";
+
+  // This regex matches trailing brackets containing keywords.
+  // We remove the 'g' flag and keep it simple.
+  const bracketRegex = /\s*[\(\[](?:Deluxe|Remastered|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty|Digital|LP|Version|Set|Box Set)[\)\]]$/i;
+
+  const dashRegex = /\s*-\s*(?:Deluxe|Remastered|Remaster|Edition|Anniversary|Expanded|Special|Bonus|Live|Explicit|Extended|Target|Walmart|Japan|Import|Clean|Dirty|Digital|LP|Version|Set|Box Set)$/i;
+
+  let cleaned = name;
+  
+  // We use a loop or call it twice to handle "Album (Live) [Remastered]"
+  // This ensures BOTH tags get stripped if they are both at the end.
+  let prev;
+  do {
+    prev = cleaned;
+    cleaned = cleaned.replace(bracketRegex, '').replace(dashRegex, '').trim();
+  } while (cleaned !== prev);
+
+  return cleaned;
 }
 
 function normalizeForComparison(str) {
@@ -525,6 +540,7 @@ async function performBackgroundUpdate(username, full, limit) {
         try {
           const mbData = await getMusicBrainzData(a.artist.name, a.name);
           
+          // --- START OF REPLACEMENT BLOCK ---
           // Upsert album by canonical name
           let albumId;
           if (dbType === 'postgres') {
@@ -535,14 +551,14 @@ async function performBackgroundUpdate(username, full, limit) {
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
               ON CONFLICT (canonical_album, canonical_artist) 
               DO UPDATE SET 
-                album_name = EXCLUDED.album_name,
-                artist_name = EXCLUDED.artist_name,
-                musicbrainz_id = COALESCE(EXCLUDED.musicbrainz_id, albums_global.musicbrainz_id),
-                release_year = COALESCE(EXCLUDED.release_year, albums_global.release_year),
                 image_url = EXCLUDED.image_url,
                 lastfm_url = EXCLUDED.lastfm_url,
-                album_type = COALESCE(EXCLUDED.album_type, albums_global.album_type),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = CURRENT_TIMESTAMP,
+                album_name = CASE WHEN albums_global.is_manual = FALSE THEN EXCLUDED.album_name ELSE albums_global.album_name END,
+                artist_name = CASE WHEN albums_global.is_manual = FALSE THEN EXCLUDED.artist_name ELSE albums_global.artist_name END,
+                musicbrainz_id = CASE WHEN albums_global.is_manual = FALSE THEN COALESCE(EXCLUDED.musicbrainz_id, albums_global.musicbrainz_id) ELSE albums_global.musicbrainz_id END,
+                release_year = CASE WHEN albums_global.is_manual = FALSE THEN COALESCE(EXCLUDED.release_year, albums_global.release_year) ELSE albums_global.release_year END,
+                album_type = CASE WHEN albums_global.is_manual = FALSE THEN COALESCE(EXCLUDED.album_type, albums_global.album_type) ELSE albums_global.album_type END
               RETURNING id
             `, [
               mbData.canonical_name,
@@ -558,55 +574,55 @@ async function performBackgroundUpdate(username, full, limit) {
             albumId = result.rows[0].id;
           } else {
             const existing = await dbGet(
-              'SELECT id FROM albums_global WHERE canonical_album = ? AND canonical_artist = ?',
+              'SELECT id, is_manual FROM albums_global WHERE canonical_album = ? AND canonical_artist = ?',
               [mbData.canonical_name, mbData.canonical_artist]
             );
 
             if (existing) {
-              await dbRun(`
-                UPDATE albums_global SET
-                  album_name = ?,
-                  artist_name = ?,
-                  musicbrainz_id = COALESCE(?, musicbrainz_id),
-                  release_year = COALESCE(?, release_year),
-                  image_url = ?,
-                  lastfm_url = ?,
-                  album_type = COALESCE(?, album_type),
-                  updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-              `, [
-                a.name,
-                a.artist.name,
-                mbData.musicbrainz_id,
-                mbData.release_year,
-                a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-                a.url,
-                mbData.type,
-                existing.id
-              ]);
+              if (!existing.is_manual) {
+                await dbRun(`
+                  UPDATE albums_global SET
+                    album_name = ?, artist_name = ?,
+                    musicbrainz_id = COALESCE(?, musicbrainz_id),
+                    release_year = COALESCE(?, release_year),
+                    image_url = ?, lastfm_url = ?,
+                    album_type = COALESCE(?, album_type),
+                    updated_at = CURRENT_TIMESTAMP
+                  WHERE id = ?
+                `, [
+                  a.name, a.artist.name, mbData.musicbrainz_id, mbData.release_year,
+                  a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+                  a.url, mbData.type, existing.id
+                ]);
+              } else {
+                await dbRun(`
+                  UPDATE albums_global SET
+                    image_url = ?, lastfm_url = ?, updated_at = CURRENT_TIMESTAMP
+                  WHERE id = ?
+                `, [
+                  a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+                  a.url, existing.id
+                ]);
+              }
               albumId = existing.id;
             } else {
               const info = db.prepare(`
                 INSERT INTO albums_global (
                   canonical_album, canonical_artist, album_name, artist_name,
-                  musicbrainz_id, release_year, image_url, lastfm_url, album_type, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                  musicbrainz_id, release_year, image_url, lastfm_url, album_type, updated_at, is_manual
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0)
               `).run(
-                mbData.canonical_name,
-                mbData.canonical_artist,
-                a.name,
-                a.artist.name,
-                mbData.musicbrainz_id,
-                mbData.release_year,
+                mbData.canonical_name, mbData.canonical_artist, a.name, a.artist.name,
+                mbData.musicbrainz_id, mbData.release_year,
                 a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-                a.url,
-                mbData.type
+                a.url, mbData.type
               );
               albumId = info.lastInsertRowid;
             }
           }
+          // --- END OF REPLACEMENT BLOCK ---
 
-          // Upsert user album data
+          // Upsert user album data (Corrected: No duplicates)
           if (dbType === 'postgres') {
             await db.query(`
               INSERT INTO user_albums (username, album_id, playcount, updated_at)
