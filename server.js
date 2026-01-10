@@ -420,10 +420,12 @@ async function getMusicBrainzData(artist, album) {
           };
         })
         .sort((a, b) => {
-          if (Math.abs(b.score - a.score) > 10) {
-            return b.score - a.score;
+          // If both are strong matches (score > 400), pick the oldest one regardless of score
+          if (a.score > 400 && b.score > 400) {
+            return a.year - b.year;
           }
-          return a.year - b.year;
+          // Otherwise, fall back to the highest score
+          return b.score - a.score;
         });
       
       if (candidates.length > 0) {
