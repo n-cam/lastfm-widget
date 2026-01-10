@@ -325,10 +325,9 @@ async function getMusicBrainzData(artist, album) {
 
   try {
     const queries = [
-    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // Strict
-    `releasegroup:"${cleanedAlbum}"`,                              // Title focus
-    `artist:"${cleanedArtist}"`,                                   // Artist focus (for Ed Sheeran 'x')
-    `"${cleanedAlbum}" "${cleanedArtist}"`                         // Last resort
+    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
+    `releasegroup:"${cleanedAlbum}"`, // NEW: Search by title alone if artist+title fails
+    `artist:"${cleanedArtist}"`,     // For "x" and "Animal"
 ];
     
     let allCandidates = [];
@@ -372,7 +371,8 @@ async function getMusicBrainzData(artist, album) {
         const isRebrand = normRgMain.includes(normInput.replace('the ', '')) || normInput.includes(normRgMain.replace('the ', ''));
         const isVAException = (normRgMain.includes('various artists') || searchTitleLower.includes('cast')) && titleSim > 0.8;
 
-        if (!isDirectMatch && !isRebrand && !isVAException && artistSim < 0.5) return false;
+        if (!isDirectMatch && !isRebrand && !isVAException && artistSim < 0.6) return false;
+        
 
         // --- SHIELD 2: SHORT TITLE PROTECTION (Ed Sheeran) ---
         const normTitleMB = normalizeForComparison(rg.title);
@@ -419,7 +419,7 @@ async function getMusicBrainzData(artist, album) {
         }
 
         // 3. VETO: EP vs Full Album (Calvin Harris / Normani)
-        if ((primaryType === 'ep' || primaryType === 'single') && !searchTitleLower.includes('ep')) {
+        if ((primaryType === 'ep' || primaryType === 'single') && normTitleMB !== normTitleSearch) {
             score -= 600;
         }
 
