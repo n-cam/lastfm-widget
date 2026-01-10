@@ -350,25 +350,47 @@ async function getMusicBrainzData(artist, album) {
 
     const candidates = uniqueCandidates
         .filter(rg => {
-          if (!rg['first-release-date']) return false;
-          
-          const rgArtist = rg['artist-credit']?.[0]?.name || "";
-          const artistSimilarity = stringSimilarity(artist, rgArtist);
-          
-          // 🛡️ GATEKEEPER: Soft Match Check
-          // Fixes "Ms. Lauryn Hill" (0.7 sim) vs "Lauryn Hill"
-          const normRg = normalizeForComparison(rgArtist);
-          const normInput = normalizeForComparison(artist);
-          const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
-          
-          // If similarity is bad (< 0.5) AND it's not a substring match -> REJECT
-          if (artistSimilarity < 0.5 && !isInclusiveMatch) return false;
+            if (!rg['first-release-date']) return false;
 
-          const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-          if (titleSimilarity < 0.3) return false;
-          
-          return true;
-        })
+            const rgArtist = rg['artist-credit']?.[0]?.name || "";
+            const normRg = normalizeForComparison(rgArtist);
+            const normInput = normalizeForComparison(artist);
+            const rgTitleLower = rg.title.toLowerCase();
+            const searchTitleLower = cleanedAlbum.toLowerCase();
+
+            // --- SHIELD 1: THE COLLABORATION & HALLUCINATION GATEKEEPER ---
+            // Fixes: Bruno Mars vs Silk Sonic AND Bruno Mars vs Dub Tractor
+            const inputWords = normInput.split(' ');
+            const matchesAllWords = inputWords.every(word => normRg.includes(word));
+            const artistSim = stringSimilarity(artist, rgArtist);
+
+            // If the words don't match (Dub Tractor) AND similarity is low, REJECT.
+            if (!matchesAllWords && artistSim < 0.4) return false;
+
+            // --- SHIELD 2: SHORT TITLE PROTECTION ---
+            // Fixes: Ed Sheeran "x" vs Remixes
+            // If title is 2 chars or less, we require the artist to be a substring match.
+            if (cleanedAlbum.length < 3 && !normRg.includes(normInput)) return false;
+
+            // --- SHIELD 3: SMART LIVE/SESSION REJECTION ---
+            // Fixes: Mother Mother "O My Heart" vs "Live Sessions"
+            const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+            const isExplicitlyLive = secondaryTypes.includes('live');
+            const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
+
+            // If MB says it's Live, but your search didn't ask for Live, and it's longer... REJECT.
+            if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
+              return false;
+            }
+
+            // --- SHIELD 4: BASIC SIMILARITY ---
+            // Keep your existing title similarity check as a final safety.
+            const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
+            if (titleSimilarity < 0.3) return false;
+
+            return true;
+          })
+
         .map(rg => {
           const year = parseInt(rg['first-release-date'].split('-')[0], 10);
           const primaryType = rg['primary-type']?.toLowerCase() || null;
