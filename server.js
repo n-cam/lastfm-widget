@@ -337,18 +337,35 @@ function buildSearchQueries(artist, album) {
   // Query 1: Most specific - exact artist + album
   queries.push(`releasegroup:"${album}" AND artist:"${artist}"`);
   
-  // Query 2: Try without special characters if present
-  const albumNoSpecial = album.replace(/[^a-zA-Z0-9\s]/g, '');
+  // Query 2: Try without honorifics (Ms., Mr., Dr.)
+  const artistNoHonorific = artist.replace(/^(Ms\.?|Mr\.?|Dr\.?)\s+/i, '');
+  if (artistNoHonorific !== artist) {
+    queries.push(`releasegroup:"${album}" AND artist:"${artistNoHonorific}"`);
+  }
+  
+  // Query 3: Try without special characters in album title
+  const albumNoSpecial = album.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   if (albumNoSpecial !== album && albumNoSpecial.length > 0) {
     queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artist}"`);
   }
   
-  // Query 3: For very short titles, use release search
+  // Query 4: Combine both (no honorific + no special chars)
+  if (artistNoHonorific !== artist && albumNoSpecial !== album) {
+    queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artistNoHonorific}"`);
+  }
+  
+  // Query 5: For very short titles, use release search
   if (album.length <= 3) {
     queries.push(`release:"${album}" AND artist:"${artist}"`);
   }
   
-  // Stop here - don't do broad searches that cause bad matches
+  // Query 6: For Broadway/soundtracks, try broader artist search
+  if (album.toLowerCase().includes('broadway') || 
+      album.toLowerCase().includes('soundtrack') ||
+      album.toLowerCase().includes('original cast')) {
+    queries.push(`releasegroup:"${album}"`);
+  }
+  
   return queries;
 }
 
@@ -470,7 +487,7 @@ async function getMusicBrainzData(artist, album) {
     }
   }
 
-  const DEBUG = false;
+  const DEBUG = true; // TEMPORARILY ENABLED for testing
   if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
 
   try {
@@ -587,8 +604,9 @@ async function getMusicBrainzData(artist, album) {
       console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - ${candidates[0].score}`);
     }
 
-    if (candidates.length > 0 && candidates[0].score > 400) { // MINIMUM SCORE THRESHOLD
+    if (candidates.length > 0 && candidates[0].score > 200) { // LOWERED from 400 for testing
       const best = candidates[0];
+      if (DEBUG) console.log(`  ✅ ACCEPTING with score ${best.score}`);
       const result = {
         musicbrainz_id: best.id,
         release_year: best.year,
@@ -600,7 +618,12 @@ async function getMusicBrainzData(artist, album) {
       return result;
     }
     
+    if (DEBUG && candidates.length > 0) {
+      console.log(`  ❌ REJECTING - score too low: ${candidates[0].score} (need >200)`);
+    }
+    
     throw new Error(`No high-quality match (best score: ${candidates[0]?.score || 0})`);
+
 
   } catch (err) {
     console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
@@ -1263,6 +1286,29 @@ app.get('/api/proxy-image', async (req, res) => {
   } catch (err) {
     res.status(500).send('Proxy error');
   }
+});
+
+app.get('/api/debug/mb-test', async (req, res) => {
+  const artist = req.query.artist || 'Ms. Lauryn Hill';
+  const album = req.query.album || 'The Miseducation of Lauryn Hill';
+  
+  // Temporarily enable debug
+  const originalConsoleLog = console.log;
+  const logs = [];
+  console.log = (...args) => {
+    logs.push(args.join(' '));
+    originalConsoleLog(...args);
+  };
+  
+  const result = await getMusicBrainzData(artist, album);
+  
+  console.log = originalConsoleLog;
+  
+  res.json({
+    input: { artist, album },
+    result,
+    logs
+  });
 });
 
 app.get('/api/admin/merge-duplicates', async (req, res) => {
