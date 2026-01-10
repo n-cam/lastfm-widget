@@ -310,6 +310,21 @@ function stringSimilarity(str1, str2) {
   return jaccard * 0.7 + lengthRatio * 0.3;
 }
 
+function toTitleCase(str) {
+  // Normalize to title case for consistent storage
+  if (!str) return str;
+  return str
+    .toLowerCase()
+    .split(' ')
+    .map((word, index) => {
+      // Keep certain words lowercase (but always capitalize first word)
+      const lowercase = ['a', 'an', 'the', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'from'];
+      if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1);
+      return lowercase.includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
 function buildSearchQueries(artist, album) {
   const queries = [];
   
@@ -440,7 +455,13 @@ async function getMusicBrainzData(artist, album) {
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
     if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
-        return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, release_year: null, musicbrainz_id: null, type: 'Unknown' };
+        return { 
+          canonical_name: toTitleCase(cleanedAlbum), 
+          canonical_artist: toTitleCase(cleanedArtist), 
+          musicbrainz_id: null, 
+          release_year: null, 
+          type: 'Unknown' 
+        };
     }
   }
 
@@ -596,6 +617,7 @@ async function getMusicBrainzData(artist, album) {
         canonical_name: toTitleCase(best.title),
         canonical_artist: toTitleCase(best.rgArtist)
       };
+
       mbGlobalCache.set(cacheKey, result);
       return result;
     }
@@ -1266,7 +1288,6 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
-// Add this endpoint to clean up existing duplicates
 app.get('/api/admin/merge-duplicates', async (req, res) => {
   if (!req.query.confirm) {
     return res.json({ 
@@ -1301,14 +1322,38 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
         console.log(`Merging ${albums.length} versions of "${keeper.canonical_album}"`);
         
         for (const duplicate of toMerge) {
-          // Update user_albums to point to keeper
-          await dbRun(
-            `UPDATE user_albums SET album_id = $1 WHERE album_id = $2`,
-            [keeper.id, duplicate.id]
-          );
+          // FIXED: Update or delete user_albums entries
+          if (dbType === 'postgres') {
+            // For each user that has the duplicate, update playcount on keeper if needed
+            await db.query(`
+              INSERT INTO user_albums (username, album_id, playcount, updated_at)
+              SELECT username, $1, playcount, updated_at
+              FROM user_albums
+              WHERE album_id = $2
+              ON CONFLICT (username, album_id) 
+              DO UPDATE SET 
+                playcount = GREATEST(user_albums.playcount, EXCLUDED.playcount),
+                updated_at = CURRENT_TIMESTAMP
+            `, [keeper.id, duplicate.id]);
+            
+            // Delete the duplicate entries
+            await db.query('DELETE FROM user_albums WHERE album_id = $1', [duplicate.id]);
+            
+            // Delete the duplicate album
+            await db.query('DELETE FROM albums_global WHERE id = $1', [duplicate.id]);
+          } else {
+            // SQLite version
+            await dbRun(`
+              INSERT OR REPLACE INTO user_albums (username, album_id, playcount, updated_at)
+              SELECT username, ?, MAX(playcount), CURRENT_TIMESTAMP
+              FROM user_albums
+              WHERE album_id IN (?, ?)
+              GROUP BY username
+            `, [keeper.id, keeper.id, duplicate.id]);
+            
+            await dbRun('DELETE FROM albums_global WHERE id = ?', [duplicate.id]);
+          }
           
-          // Delete duplicate
-          await dbRun('DELETE FROM albums_global WHERE id = $1', [duplicate.id]);
           mergedCount++;
         }
       }
