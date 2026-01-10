@@ -364,48 +364,51 @@ async function getMusicBrainzData(artist, album) {
 
     const candidates = uniqueCandidates
         .filter(rg => {
-    if (!rg['first-release-date']) return false;
+        if (!rg['first-release-date']) return false;
 
-          const rgArtist = rg['artist-credit']?.[0]?.name || "";
-          const normRg = normalizeForComparison(rgArtist);
-          const normInput = normalizeForComparison(artist);
-          const rgTitleLower = rg.title.toLowerCase();
-          const searchTitleLower = cleanedAlbum.toLowerCase();
+        // 1. Gather all credited artists from the array (fixes Silk Sonic/Bruno Mars)
+        const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
+        const rgArtistMain = normalizeForComparison(rg['artist-credit']?.[0]?.name || "");
+        const normInput = normalizeForComparison(artist);
+        
+        const rgTitleLower = rg.title.toLowerCase();
+        const searchTitleLower = cleanedAlbum.toLowerCase();
 
-          // --- SHIELD 1: THE IRONCLAD ARTIST GATEKEEPER ---
-          // This combines the "Direct Match" and "First Word" logic into one check.
-          const isDirectMatch = normRg.includes(normInput) || normInput.includes(normRg);
-          
-          const firstWordInput = normInput.split(' ')[0];
-          const firstWordRg = normRg.split(' ')[0];
-          const firstWordMatch = firstWordInput === firstWordRg && firstWordInput.length > 2;
+        // --- SHIELD 1: THE IRONCLAD ARTIST GATEKEEPER ---
+        // Check if input artist matches ANY of the credited artists (Bruno Mars vs Silk Sonic)
+        const isDirectMatch = allArtists.some(a => a.includes(normInput) || normInput.includes(a));
+        
+        // First word fallback (Panic! At The Disco vs Panic At The Disco)
+        const firstWordInput = normInput.split(' ')[0];
+        const firstWordRg = rgArtistMain.split(' ')[0];
+        const firstWordMatch = firstWordInput === firstWordRg && firstWordInput.length > 2;
 
-          // If it's not a direct match (Lauryn Hill/Silk Sonic) AND doesn't share a 
-          // unique first word, it's a hallucination (Maxh. vs Emdasche). REJECT.
-          if (!isDirectMatch && !firstWordMatch) return false;
+        // Safety net for Group names: If the album title is a 95% match, 
+        // allow a pass even if the artist name differs (e.g., searching Bruno Mars for a Silk Sonic album)
+        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
+        const isKnownCollab = titleSim > 0.9 && (searchTitleLower.includes(rgArtistMain) || rgTitleLower.includes(normInput));
 
-          // --- SHIELD 2: SHORT TITLE PROTECTION ---
-          // If title is <= 3 chars (x, v, 21), require an EXACT title match.
-          if (cleanedAlbum.length <= 3 && rgTitleLower !== searchTitleLower) {
-              return false;
-          }
+        if (!isDirectMatch && !firstWordMatch && !isKnownCollab) return false;
 
-          // --- SHIELD 3: LIVE REJECTION ---
-          const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
-          const isExplicitlyLive = secondaryTypes.includes('live');
-          const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
-          
-          if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
-              return false;
-          }
+        // --- SHIELD 2: SHORT TITLE PROTECTION ---
+        if (cleanedAlbum.length <= 3 && rgTitleLower !== searchTitleLower) return false;
 
-          // --- SHIELD 4: REMIX REJECTION ---
-          const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
-          if (isRemix && !searchTitleLower.includes('remix')) return false;
+        // --- SHIELD 3: LIVE REJECTION ---
+        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+        const isExplicitlyLive = secondaryTypes.includes('live');
+        const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
+        
+        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
+            return false;
+        }
 
-          // --- SHIELD 5: MINIMUM SIMILARITY ---
-          return stringSimilarity(cleanedAlbum, rg.title) > 0.3;
-      })
+        // --- SHIELD 4: REMIX REJECTION ---
+        const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
+        if (isRemix && !searchTitleLower.includes('remix')) return false;
+
+        // --- SHIELD 5: MINIMUM SIMILARITY ---
+        return titleSim > 0.3;
+    })
 
         .map(rg => {
           const year = parseInt(rg['first-release-date'].split('-')[0], 10);
