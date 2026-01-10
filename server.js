@@ -326,13 +326,13 @@ async function getMusicBrainzData(artist, album) {
   }
 
   try {
-    // 3. Search Strategy: release-group (Abstract Album) > release (Specific CD)
+    // 3. Search Strategy
     const queries = [
-    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
-    `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
-    `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // New: check specific releases
-    `${cleanedAlbum} ${cleanedArtist}`
-];
+        `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
+        `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
+        `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`,
+        `${cleanedAlbum} ${cleanedArtist}`
+    ];
     
     let allCandidates = [];
     
@@ -352,7 +352,6 @@ async function getMusicBrainzData(artist, album) {
       const data = await response.json();
       if (data['release-groups'] && data['release-groups'].length > 0) {
         allCandidates.push(...data['release-groups']);
-        // If we found a strong match in the first strict query, stop early to save time
         if (data['release-groups'][0].score === 100) break;
         if (allCandidates.length >= 25) break;
       }
@@ -364,157 +363,117 @@ async function getMusicBrainzData(artist, album) {
     const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
 
     const candidates = uniqueCandidates
-        .filter(rg => {
+      .filter(rg => {
         if (!rg['first-release-date']) return false;
 
-        // 1. Gather all credited artists from the array (fixes Silk Sonic/Bruno Mars)
         const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
         const rgArtistMain = normalizeForComparison(rg['artist-credit']?.[0]?.name || "");
         const normInput = normalizeForComparison(artist);
         
         const rgTitleLower = rg.title.toLowerCase();
         const searchTitleLower = cleanedAlbum.toLowerCase();
+        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
 
         // --- SHIELD 1: THE IRONCLAD ARTIST GATEKEEPER ---
-        // Check if input artist matches ANY of the credited artists (Bruno Mars vs Silk Sonic)
         const isDirectMatch = allArtists.some(a => a.includes(normInput) || normInput.includes(a));
         
-        // First word fallback (Panic! At The Disco vs Panic At The Disco)
         const firstWordInput = normInput.split(' ')[0];
         const firstWordRg = rgArtistMain.split(' ')[0];
         const firstWordMatch = firstWordInput === firstWordRg && firstWordInput.length > 2;
 
-        // Safety net for Group names: If the album title is a 95% match, 
-        // allow a pass even if the artist name differs (e.g., searching Bruno Mars for a Silk Sonic album)
-        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
+        // Silk Sonic / Group Alias check
         const isKnownCollab = titleSim > 0.9 && (searchTitleLower.includes(rgArtistMain) || rgTitleLower.includes(normInput));
 
-        if (!isDirectMatch && !firstWordMatch && !isKnownCollab) return false;
+        // Various Artists / Soundtrack Exception (The Wicked/Grease Fix)
+        const isVA = rgArtistMain.includes('various artists');
+        const isCastSearch = searchTitleLower.includes('cast') || searchTitleLower.includes('soundtrack');
+        const isVAException = (isVA || isCastSearch) && titleSim > 0.8;
+
+        if (!isDirectMatch && !firstWordMatch && !isKnownCollab && !isVAException) return false;
 
         // --- SHIELD 2: SHORT TITLE PROTECTION ---
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
-
-        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) {
-            return false;
-        }
+        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
 
         // --- SHIELD 3: LIVE REJECTION ---
         const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
         const isExplicitlyLive = secondaryTypes.includes('live');
         const userWantsLive = searchTitleLower.includes('live') || searchTitleLower.includes('session');
-        
-        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) {
-            return false;
-        }
+        if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) return false;
 
         // --- SHIELD 4: REMIX REJECTION ---
         const isRemix = secondaryTypes.includes('remix') || rgTitleLower.includes('remix');
         if (isRemix && !searchTitleLower.includes('remix')) return false;
 
-        // --- SHIELD 5: MINIMUM SIMILARITY ---
         return titleSim > 0.3;
-    })
+      })
+      .map(rg => {
+        const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
+        const primaryType = rg['primary-type']?.toLowerCase() || null;
+        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
+        const rgArtist = rg['artist-credit']?.[0]?.name || "";
 
-        .map(rg => {
-          const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
-          const primaryType = rg['primary-type']?.toLowerCase() || null;
-          const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
-          const rgArtist = rg['artist-credit']?.[0]?.name || "";
+        const normRg = normalizeForComparison(rgArtist);
+        const normInput = normalizeForComparison(artist);
+        const normTitleMB = normalizeForComparison(rg.title);
+        const normTitleSearch = normalizeForComparison(cleanedAlbum);
 
-          const normRg = normalizeForComparison(rgArtist);
-          const normInput = normalizeForComparison(artist);
-          const normTitleMB = normalizeForComparison(rg.title);
-          const normTitleSearch = normalizeForComparison(cleanedAlbum);
+        const artistSimilarity = stringSimilarity(artist, rgArtist);
+        const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
+        
+        let score = 0;
+        score += artistSimilarity * 400; 
+        score += titleSimilarity * 200;
 
-          const artistSimilarity = stringSimilarity(artist, rgArtist);
-          const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-          
-          // 🧠 SCORING ENGINE
-          let score = 0;
-          
-          // A. Baseline Weighting
-          score += artistSimilarity * 400; 
-          score += titleSimilarity * 200;
+        // Various Artists / Soundtrack Weighting
+        if (normInput === 'various artists' || normRg.includes('various artists')) {
+          if (secondaryTypes.includes('soundtrack')) score += 400;
+          if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
+        }
 
-          // B. The "Various Artists" & Soundtrack Logic (Systemic Fix)
-          if (normInput === 'various artists') {
-            // Boost official soundtrack tags
-            if (secondaryTypes.includes('soundtrack')) score += 400;
-            // Penalty for length mismatches (Kills "100 Hits of Grease")
-            if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
-          }
+        // Budget/Parody Detector
+        const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of'];
+        const isBudgetMatch = budgetKeywords.some(word => normTitleMB.includes(word));
+        const userWantsBudget = budgetKeywords.some(word => normTitleSearch.includes(word));
+        if (isBudgetMatch && !userWantsBudget) score -= 800;
 
-          // C. Budget/Parody Detector (The "Grease" Fix)
-          const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of'];
-          const isBudgetMatch = budgetKeywords.some(word => normTitleMB.includes(word));
-          const userWantsBudget = budgetKeywords.some(word => normTitleSearch.includes(word));
-          
-          if (isBudgetMatch && !userWantsBudget) {
-            score -= 800; // Nuclear penalty for parodies/covers
-          }
+        // Length/Inclusion Match
+        if (rg.title.length > cleanedAlbum.length + 5 && !isBudgetMatch) score -= 300;
+        const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
+        if (isInclusiveMatch) score += 200;
+        
+        // Exact Bonuses
+        if (primaryType === 'album') score += 150;
+        if (normTitleMB === normTitleSearch) score += 200;
 
-          // D. Bootleg/Length Penalty
-          if (rg.title.length > cleanedAlbum.length + 5 && !isBudgetMatch) {
-            score -= 300;
-          }
+        // General Quality Penalties
+        const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
+        if (secondaryTypes.some(t => badTypes.includes(t))) {
+          if (!badTypes.some(t => normTitleSearch.includes(t))) score -= 500;
+        }
 
-          // E. Artist Match Bonuses
-          const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
-          if (isInclusiveMatch) score += 200;
-          if (artistSimilarity > 0.95) score += 100;
+        return { ...rg, score, year, rgArtist };
+      })
+      .sort((a, b) => {
+        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
+        if (a.score > 600 && b.score > 600) return a.year - b.year;
+        return b.score - a.score;
+      });
 
-          // F. Type Boosters
-          if (primaryType === 'album') score += 150;
-          if (primaryType === 'ep') score += 50;
-          
-          // G. Exact Title Match Bonus
-          if (normTitleMB === normTitleSearch) score += 200;
-
-          // H. General Quality Penalties
-          const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
-          if (secondaryTypes.some(t => badTypes.includes(t))) {
-            // Only penalize if user didn't specifically ask for it
-            const userWantsBad = badTypes.some(t => normTitleSearch.includes(t));
-            if (!userWantsBad) score -= 500;
-          }
-
-          return { ...rg, score, year, rgArtist };
-        })
-
-        .sort((a, b) => {
-          const threshold = 600;
-
-          // If one is significantly better than the other (e.g. 800 vs 610), 
-          // take the better match regardless of year.
-          if (Math.abs(a.score - b.score) > 150) {
-            return b.score - a.score;
-          }
-
-          // If they are both high-quality matches (e.g. 800 vs 780), pick the oldest.
-          if (a.score > threshold && b.score > threshold) {
-            return a.year - b.year;
-          }
-          
-          return b.score - a.score;
-        });
-
-      if (candidates.length > 0) {
-        const best = candidates[0];
-        const result = {
-          musicbrainz_id: best.id,
-          release_year: best.year,
-          type: best['primary-type'] || 'Album',
-          canonical_name: best.title, // Use MB title
-          canonical_artist: best.rgArtist // Use MB artist
-        };
-        mbGlobalCache.set(cacheKey, result);
-        mbFailureCache.delete(cacheKey);
-        return result;
-      }
-      
-      // No match found
-      throw new Error("No suitable candidates after filtering");
+    if (candidates.length > 0) {
+      const best = candidates[0];
+      const result = {
+        musicbrainz_id: best.id,
+        release_year: best.year,
+        type: best['primary-type'] || 'Album',
+        canonical_name: best.title,
+        canonical_artist: best.rgArtist
+      };
+      mbGlobalCache.set(cacheKey, result);
+      return result;
+    }
+    throw new Error("No suitable candidates after filtering");
 
   } catch (err) {
     console.error(`  ❌ MB Fail: ${cleanedAlbum} - ${err.message}`);
