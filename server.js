@@ -377,7 +377,7 @@ async function getMusicBrainzData(artist, album) {
           
           return true;
         })
-        
+
         .map(rg => {
           const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
           const primaryType = rg['primary-type']?.toLowerCase() || null;
@@ -387,54 +387,41 @@ async function getMusicBrainzData(artist, album) {
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
 
           let score = 0;
-
-          // 🚀 INCREASED WEIGHT: Artist similarity is now the most important factor
           score += artistSimilarity * 300; 
           score += titleSimilarity * 200;
 
-          if (artistSimilarity < 0.9 && !isExactArtist) {
-            score -= 400; // Total disqualification for mediocre artist matches
+          // 🚀 NEW: Strict Title Penalty
+          // If the MusicBrainz title is much longer than our search title, 
+          // it's probably a "Deluxe", "Slowed", or "Fan Collection"
+          if (rg.title.length > cleanedAlbum.length + 10) {
+            score -= 300;
           }
+
+          if (artistSimilarity < 0.7) score -= 200; 
 
           if (primaryType === 'album') score += 150;
           else if (primaryType === 'ep') score += 50;
 
-          const badSecondaryTypes = ['compilation', 'live', 'soundtrack'];
-          if (
-            rg['secondary-types']?.some(t =>
-              badSecondaryTypes.includes(t.toLowerCase())
-            )
-          ) {
-            score -= 80;
+          const badSecondaryTypes = ['compilation', 'live', 'soundtrack', 'demo', 'archive', 'bootleg', 'remix'];
+          if (rg['secondary-types']?.some(t => badSecondaryTypes.includes(t.toLowerCase()))) {
+            score -= 400; // Increased penalty
           }
 
-          if (
-            normalizeForComparison(rg.title) ===
-            normalizeForComparison(cleanedAlbum)
-          ) {
-            score += 100;
+          if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) {
+            score += 200; // Increased exact match bonus
           }
 
-          // 🚀 EXACT MATCH BONUS: If the artist name is identical, give a massive boost
-          if (
-            normalizeForComparison(rgArtist) ===
-            normalizeForComparison(artist)
-          ) {
+          if (normalizeForComparison(rgArtist) === normalizeForComparison(artist)) {
             score += 150; 
           }
 
-          return {
-            ...rg,
-            score,
-            year,
-            artistSimilarity,
-            titleSimilarity,
-            rgArtist
-          };
+          return { ...rg, score, year, artistSimilarity, titleSimilarity, rgArtist };
         })
+
        .sort((a, b) => {
-          // 🚀 RAISED TO 650: Only trust the year if the match is nearly perfect
-          if (a.score > 650 && b.score > 650) {
+          // 🚀 EXTREME PRECISION: Only trust the year if it's a near-perfect match 
+          // AND the titles are very similar in length/content
+          if (a.score > 700 && b.score > 700 && Math.abs(a.titleSimilarity - b.titleSimilarity) < 0.05) {
             return a.year - b.year;
           }
           return b.score - a.score;
