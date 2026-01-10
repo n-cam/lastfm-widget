@@ -417,9 +417,15 @@ async function getMusicBrainzData(artist, album) {
     })
 
         .map(rg => {
-          const year = parseInt(rg['first-release-date'].split('-')[0], 10);
+          const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
           const primaryType = rg['primary-type']?.toLowerCase() || null;
+          const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
           const rgArtist = rg['artist-credit']?.[0]?.name || "";
+
+          const normRg = normalizeForComparison(rgArtist);
+          const normInput = normalizeForComparison(artist);
+          const normTitleMB = normalizeForComparison(rg.title);
+          const normTitleSearch = normalizeForComparison(cleanedAlbum);
 
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
@@ -427,41 +433,55 @@ async function getMusicBrainzData(artist, album) {
           // 🧠 SCORING ENGINE
           let score = 0;
           
-          // A. Heavy weighting on Artist (Prevents "Deacon Blue" vs "Arctic Monkeys")
+          // A. Baseline Weighting
           score += artistSimilarity * 400; 
           score += titleSimilarity * 200;
 
-          // B. Bootleg Detector (Prevents "Tyler SLOW+REVERB")
-          // If the MB title is significantly longer (> 8 chars) than our clean title, penalty.
-          if (rg.title.length > cleanedAlbum.length + 5) {
-             score -= 400;
+          // B. The "Various Artists" & Soundtrack Logic (Systemic Fix)
+          if (normInput === 'various artists') {
+            // Boost official soundtrack tags
+            if (secondaryTypes.includes('soundtrack')) score += 400;
+            // Penalty for length mismatches (Kills "100 Hits of Grease")
+            if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
           }
 
-          // C. Strict Artist Penalty (Prevents "The Rip-Off Artist")
-          // If not a substring match and sim < 0.8, penalty.
-          const normRg = normalizeForComparison(rgArtist);
-          const normInput = normalizeForComparison(artist);
+          // C. Budget/Parody Detector (The "Grease" Fix)
+          const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of'];
+          const isBudgetMatch = budgetKeywords.some(word => normTitleMB.includes(word));
+          const userWantsBudget = budgetKeywords.some(word => normTitleSearch.includes(word));
+          
+          if (isBudgetMatch && !userWantsBudget) {
+            score -= 800; // Nuclear penalty for parodies/covers
+          }
+
+          // D. Bootleg/Length Penalty
+          if (rg.title.length > cleanedAlbum.length + 5 && !isBudgetMatch) {
+            score -= 300;
+          }
+
+          // E. Artist Match Bonuses
           const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
-          if (!isInclusiveMatch && artistSimilarity < 0.8) {
-             score -= 200;
-          }
+          if (isInclusiveMatch) score += 200;
+          if (artistSimilarity > 0.95) score += 100;
 
-          // D. Boosters
+          // F. Type Boosters
           if (primaryType === 'album') score += 150;
           if (primaryType === 'ep') score += 50;
           
-          // Exact Match Bonuses
-          if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) score += 150;
-          if (isInclusiveMatch) score += 150;
+          // G. Exact Title Match Bonus
+          if (normTitleMB === normTitleSearch) score += 200;
 
-          // E. Bad Types Penalty (Prevents Demos/Live)
-          const badSecondaryTypes = ['compilation', 'live', 'soundtrack', 'demo', 'remix', 'dj-mix'];
-          if (rg['secondary-types']?.some(t => badSecondaryTypes.includes(t.toLowerCase()))) {
-            score -= 500;
+          // H. General Quality Penalties
+          const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
+          if (secondaryTypes.some(t => badTypes.includes(t))) {
+            // Only penalize if user didn't specifically ask for it
+            const userWantsBad = badTypes.some(t => normTitleSearch.includes(t));
+            if (!userWantsBad) score -= 500;
           }
 
           return { ...rg, score, year, rgArtist };
         })
+
         .sort((a, b) => {
           const threshold = 600;
 
