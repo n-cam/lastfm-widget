@@ -361,13 +361,15 @@ async function getMusicBrainzData(artist, album) {
           const rgArtist = rg['artist-credit'][0].name;
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           
-          if (artistSimilarity < 0.45) return false;
+          // 🛑 HARD STOP: If the artist similarity is less than 80%, 
+          // and it's not an exact name match, kill it immediately.
+          const isExactArtist = normalizeForComparison(rgArtist) === normalizeForComparison(artist);
+          if (artistSimilarity < 0.8 && !isExactArtist) {
+            return false;
+          }
           
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
           if (titleSimilarity < 0.3) return false;
-          
-          const primaryType = rg['primary-type'];
-          if (primaryType === 'Single') return false;
           
           return true;
         })
@@ -385,8 +387,8 @@ async function getMusicBrainzData(artist, album) {
           score += artistSimilarity * 300; 
           score += titleSimilarity * 200;
 
-          if (artistSimilarity < 0.7) {
-          score -= 200; 
+          if (artistSimilarity < 0.9 && !isExactArtist) {
+            score -= 400; // Total disqualification for mediocre artist matches
           }
 
           if (primaryType === 'album') score += 150;
