@@ -325,12 +325,11 @@ async function getMusicBrainzData(artist, album) {
 
   try {
     const queries = [
-        `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
-        `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
-        // Broad search for cases like "The Chicks" vs "Dixie Chicks" or Japanese titles
-        `"${cleanedAlbum}" "${cleanedArtist}"`,
-        `${cleanedAlbum} ${cleanedArtist}`
-    ];
+    `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // Strict
+    `releasegroup:"${cleanedAlbum}"`,                              // Title focus
+    `artist:"${cleanedArtist}"`,                                   // Artist focus (for Ed Sheeran 'x')
+    `"${cleanedAlbum}" "${cleanedArtist}"`                         // Last resort
+];
     
     let allCandidates = [];
     for (const queryString of queries) {
@@ -359,32 +358,23 @@ async function getMusicBrainzData(artist, album) {
         if (!rg['first-release-date']) return false;
 
         const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
-        const rgArtistMain = normalizeForComparison(rg['artist-credit']?.[0]?.name || "");
+        const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
         const normInput = normalizeForComparison(artist);
+        const normRgMain = normalizeForComparison(rgArtistMain);
         
         const rgTitleLower = rg.title.toLowerCase();
         const searchTitleLower = cleanedAlbum.toLowerCase();
         const titleSim = stringSimilarity(cleanedAlbum, rg.title);
+        const artistSim = stringSimilarity(artist, rgArtistMain);
 
-        // --- SHIELD 1: THE REBRAND-AWARE GATEKEEPER ---
+        // --- SHIELD 1: ARTIST GATEKEEPER ---
         const isDirectMatch = allArtists.some(a => a.includes(normInput) || normInput.includes(a));
-        
-        const firstWordInput = normInput.split(' ')[0];
-        const firstWordRg = rgArtistMain.split(' ')[0];
-        const firstWordMatch = firstWordInput === firstWordRg && firstWordInput.length > 2;
+        const isRebrand = normRgMain.includes(normInput.replace('the ', '')) || normInput.includes(normRgMain.replace('the ', ''));
+        const isVAException = (normRgMain.includes('various artists') || searchTitleLower.includes('cast')) && titleSim > 0.8;
 
-        // Dixie Chicks vs The Chicks check
-        const isRebrand = rgArtistMain.includes(normInput.replace('the ', '')) || normInput.includes(rgArtistMain.replace('the ', ''));
-        const isKnownCollab = titleSim > 0.9 && (searchTitleLower.includes(rgArtistMain) || rgTitleLower.includes(normInput));
+        if (!isDirectMatch && !isRebrand && !isVAException && artistSim < 0.5) return false;
 
-        // Various Artists / Soundtrack Exception
-        const isVA = rgArtistMain.includes('various artists');
-        const isCastSearch = searchTitleLower.includes('cast') || searchTitleLower.includes('soundtrack');
-        const isVAException = (isVA || isCastSearch) && titleSim > 0.8;
-
-        if (!isDirectMatch && !firstWordMatch && !isKnownCollab && !isVAException && !isRebrand) return false;
-
-        // --- SHIELD 2: SHORT TITLE PROTECTION ---
+        // --- SHIELD 2: SHORT TITLE PROTECTION (Ed Sheeran) ---
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
         if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
@@ -394,7 +384,6 @@ async function getMusicBrainzData(artist, album) {
         const isExplicitlyLive = secondaryTypes.includes('live');
         const liveKeywords = ['live', 'session', 'unplugged', 'concert', 'at the'];
         const userWantsLive = liveKeywords.some(word => searchTitleLower.includes(word));
-
         if (isExplicitlyLive && !userWantsLive && rgTitleLower.length > searchTitleLower.length + 5) return false;
 
         // --- SHIELD 4: REMIX REJECTION ---
@@ -414,76 +403,59 @@ async function getMusicBrainzData(artist, album) {
         const normInput = normalizeForComparison(artist);
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
+        const searchTitleLower = cleanedAlbum.toLowerCase(); // <--- CRITICAL: Defined for this scope
 
         const artistSimilarity = stringSimilarity(artist, rgArtist);
         const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
         
-        // 1. Base Weighting (Title is King)
+        // 1. Base Weighting
         let score = (artistSimilarity * 300) + (titleSimilarity * 500);
 
-        // 2. Various Artists & Soundtrack Logic
+        // 2. VETO: Wrong Musical (Hamilton / In the Heights)
+        const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
+        const coreRgTitle = rg.title.split(/[(\-:]/)[0].trim().toLowerCase();
+        if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
+            score -= 700; 
+        }
+
+        // 3. VETO: EP vs Full Album (Calvin Harris / Normani)
+        if ((primaryType === 'ep' || primaryType === 'single') && !searchTitleLower.includes('ep')) {
+            score -= 600;
+        }
+
+        // 4. Various Artists / Soundtracks
         if (normInput === 'various artists' || normRg.includes('various artists')) {
           if (secondaryTypes.includes('soundtrack')) score += 400;
           if (rg.title.length > cleanedAlbum.length + 12) score -= 500;
         }
 
-        // 3. Core Title Veto (The Hamilton / In the Heights Fix)
-        const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
-        const coreRgTitle = rg.title.split(/[(\-:]/)[0].trim().toLowerCase();
-        if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
-            score -= 600; 
-        }
-
-        // 4. Word Count Penalty (The Snoop Dogg "Doggystyle" Fix)
+        // 5. Word Count Penalty (Snoop Dogg)
         const searchWords = normTitleSearch.split(' ').length;
         const mbWords = normTitleMB.split(' ').length;
-        if (mbWords > searchWords + 3) {
-            score -= 400;
-        }
+        if (mbWords > searchWords + 3) score -= 400;
 
-        // 5. Budget/Sampler Detector (The Charlie Brown Fix)
+        // 6. Quality Checks (Budget/Remix/Live)
         const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'not so original', 'covers of', 'selections from', 'sampler'];
-        if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) {
-            score -= 800;
-        }
+        if (budgetKeywords.some(word => normTitleMB.includes(word)) && !normTitleSearch.includes(word)) score -= 800;
 
-        // 6. Length and Inclusion Match
-        if (rg.title.length > cleanedAlbum.length + 5 && !budgetKeywords.some(word => normTitleMB.includes(word))) {
-            score -= 300;
-        }
-        if (normRg.includes(normInput) || normInput.includes(normRg)) {
-            score += 200;
-        }
-        
-        // 7. Type Boosts (The Calvin Harris "Studio Album" Fix)
-        if (primaryType === 'album') score += 150;
-        if (primaryType === 'album' && secondaryTypes.length === 0) {
-            score += 300; // Extra boost for a clean studio album
-        }
-
-        // 8. Exact Match Bonuses
-        if (normTitleMB === normTitleSearch) {
-            score += 500; // Increased from 200 to ensure "x" or "Animal" wins
-        }
-
-        // 9. General Quality Penalties
         const badTypes = ['live', 'demo', 'remix', 'dj-mix'];
-        if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) {
-            score -= 500;
-        }
+        if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) score -= 500;
 
-        // FINAL STEP: Return the object with the calculated score
+        // 7. Length/Inclusion Adjustments
+        if (rg.title.length > cleanedAlbum.length + 5 && !budgetKeywords.some(word => normTitleMB.includes(word))) score -= 300;
+        if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
+        
+        // 8. FINAL BONUSES
+        if (primaryType === 'album') score += 150;
+        if (primaryType === 'album' && secondaryTypes.length === 0) score += 300; 
+        if (normTitleMB === normTitleSearch) score += 600; // Boosted for Ed Sheeran/Animal
+
         return { ...rg, score, year, rgArtist };
       })
+
       .sort((a, b) => {
-        // If one score is vastly superior, take it.
-        if (Math.abs(a.score - b.score) > 150) {
-            return b.score - a.score;
-        }
-        // If scores are close, prioritize the original/oldest release.
-        if (a.score > 600 && b.score > 600) {
-            return a.year - b.year;
-        }
+        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
+        if (a.score > 600 && b.score > 600) return a.year - b.year;
         return b.score - a.score;
       });
 
