@@ -419,12 +419,14 @@ async function getMusicBrainzData(artist, album) {
             rgArtist
           };
         })
-        .sort((a, b) => {
-          // If both are strong matches (score > 400), pick the oldest one regardless of score
-          if (a.score > 400 && b.score > 400) {
+       .sort((a, b) => {
+          // 🚀 TIGHTENED THRESHOLD: Only use 'Oldest Wins' for very high-confidence matches.
+          // This ensures 'The Beatles' (1968 vs 1994) works, 
+          // but 'Arctic Monkeys' (2006) doesn't lose to 'Deacon Blue' (1993).
+          if (a.score > 550 && b.score > 550) {
             return a.year - b.year;
           }
-          // Otherwise, fall back to the highest score
+          // Otherwise, stick to the highest similarity score.
           return b.score - a.score;
         });
       
