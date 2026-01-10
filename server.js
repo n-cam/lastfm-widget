@@ -381,7 +381,8 @@ async function getMusicBrainzData(artist, album) {
 
           let score = 0;
 
-          score += artistSimilarity * 250;
+          // 🚀 INCREASED WEIGHT: Artist similarity is now the most important factor
+          score += artistSimilarity * 300; 
           score += titleSimilarity * 200;
 
           if (primaryType === 'album') score += 150;
@@ -403,11 +404,12 @@ async function getMusicBrainzData(artist, album) {
             score += 100;
           }
 
+          // 🚀 EXACT MATCH BONUS: If the artist name is identical, give a massive boost
           if (
             normalizeForComparison(rgArtist) ===
             normalizeForComparison(artist)
           ) {
-            score += 100;
+            score += 150; 
           }
 
           return {
