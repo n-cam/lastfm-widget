@@ -361,7 +361,7 @@ async function getMusicBrainzData(artist, album) {
           const rgArtist = rg['artist-credit'][0].name;
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           
-          if (artistSimilarity < 0.35) return false;
+          if (artistSimilarity < 0.45) return false;
           
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
           if (titleSimilarity < 0.3) return false;
@@ -384,6 +384,10 @@ async function getMusicBrainzData(artist, album) {
           // 🚀 INCREASED WEIGHT: Artist similarity is now the most important factor
           score += artistSimilarity * 300; 
           score += titleSimilarity * 200;
+
+          if (artistSimilarity < 0.7) {
+          score -= 200; 
+          }
 
           if (primaryType === 'album') score += 150;
           else if (primaryType === 'ep') score += 50;
@@ -422,13 +426,10 @@ async function getMusicBrainzData(artist, album) {
           };
         })
        .sort((a, b) => {
-          // 🚀 TIGHTENED THRESHOLD: Only use 'Oldest Wins' for very high-confidence matches.
-          // This ensures 'The Beatles' (1968 vs 1994) works, 
-          // but 'Arctic Monkeys' (2006) doesn't lose to 'Deacon Blue' (1993).
-          if (a.score > 550 && b.score > 550) {
+          // 🚀 RAISED TO 650: Only trust the year if the match is nearly perfect
+          if (a.score > 650 && b.score > 650) {
             return a.year - b.year;
           }
-          // Otherwise, stick to the highest similarity score.
           return b.score - a.score;
         });
       
