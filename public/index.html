@@ -897,21 +897,26 @@
     });
 
     function sortAndDisplayAlbums() {
-    let sorted = [...currentAlbums];
+    // Create a fresh copy to avoid mutating original data
+    let sorted = currentAlbums.map(album => {
+        return {
+            ...album,
+            // FORCE the display properties to exist based on your DB columns
+            displayName: album.album_name || album.name || album.canonical_album,
+            displayArtist: album.artist_name || album.artist || album.canonical_artist
+        };
+    });
     
+    // 1. Sort logic
     if (currentSort === 'playcount') {
-        sorted.sort((a, b) => b.playcount - a.playcount);
+        sorted.sort((a, b) => (b.playcount || 0) - (a.playcount || 0));
     } else if (currentSort === 'year') {
         sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
     } else if (currentSort === 'name') {
-        // Use the stylized name for sorting too!
-        sorted.sort((a, b) => {
-            const nameA = a.album_name || a.name || "";
-            const nameB = b.album_name || b.name || "";
-            return nameA.localeCompare(nameB);
-        });
+        sorted.sort((a, b) => a.displayName.localeCompare(b.displayName));
     }
 
+    // 2. Pass the explicitly mapped albums to the cards
     displayAlbumCards(sorted);
 }
 
