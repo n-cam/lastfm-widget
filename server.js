@@ -386,8 +386,8 @@ async function getMusicBrainzData(artist, album) {
 
           // B. Bootleg Detector (Prevents "Tyler SLOW+REVERB")
           // If the MB title is significantly longer (> 8 chars) than our clean title, penalty.
-          if (rg.title.length > cleanedAlbum.length + 8) {
-             score -= 300;
+          if (rg.title.length > cleanedAlbum.length + 5) {
+             score -= 400;
           }
 
           // C. Strict Artist Penalty (Prevents "The Rip-Off Artist")
@@ -410,24 +410,25 @@ async function getMusicBrainzData(artist, album) {
           // E. Bad Types Penalty (Prevents Demos/Live)
           const badSecondaryTypes = ['compilation', 'live', 'soundtrack', 'demo', 'remix', 'dj-mix'];
           if (rg['secondary-types']?.some(t => badSecondaryTypes.includes(t.toLowerCase()))) {
-            score -= 400;
+            score -= 500;
           }
 
           return { ...rg, score, year, rgArtist };
         })
         .sort((a, b) => {
-          // ⚖️ THE FINAL JUDGMENT
-          
-          // If both candidates are "High Confidence" (> 600), we trust them.
-          // We pick the EARLIEST YEAR (Fixes "The Beatles" 1968 vs 1994).
-          // We set 600 because bad matches (bootlegs, wrong artists) 
-          // have been penalized well below 500 by the logic above.
-          if (a.score > 600 && b.score > 600) {
+          const threshold = 600;
+
+          // If one is significantly better than the other (e.g. 800 vs 610), 
+          // take the better match regardless of year.
+          if (Math.abs(a.score - b.score) > 150) {
+            return b.score - a.score;
+          }
+
+          // If they are both high-quality matches (e.g. 800 vs 780), pick the oldest.
+          if (a.score > threshold && b.score > threshold) {
             return a.year - b.year;
           }
           
-          // Otherwise, we don't trust the year. We pick the highest score.
-          // (Fixes "Arctic Monkeys" 2006 vs "Deacon Blue" 1993).
           return b.score - a.score;
         });
 
