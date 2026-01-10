@@ -917,43 +917,50 @@
     }
 
     function displayAlbumCards(albums) {
-        const grid = document.getElementById('albumsGrid');
-        grid.innerHTML = '';
+    const grid = document.getElementById('albumsGrid');
+    grid.innerHTML = '';
 
-        albums.forEach((album, index) => {
-            const card = document.createElement('div');
-            card.className = 'album-card';
-            card.onclick = () => window.open(album.url, '_blank');
+    albums.forEach((album, index) => {
+        const card = document.createElement('div');
+        card.className = 'album-card';
+        
+        // 1. Order of priority: Original DB names -> Canonical -> Last.fm fallback
+        const displayName = album.album_name || album.name || album.canonical_album || 'Unknown Album';
+        const displayArtist = album.artist_name || album.artist || album.canonical_artist || 'Unknown Artist';
+        const displayUrl = album.url || album.lastfm_url || '#';
 
-            const rawUrl = (album.image && album.image.length > 5) ? album.image : 
-                        (album.image_url && album.image_url.length > 5) ? album.image_url : null;
+        card.onclick = () => {
+            if (displayUrl !== '#') window.open(displayUrl, '_blank');
+        };
 
-            const imageUrl = rawUrl 
-                ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
-                : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+        const rawUrl = (album.image && album.image.length > 5) ? album.image : 
+                    (album.image_url && album.image_url.length > 5) ? album.image_url : null;
 
-            card.innerHTML = `
-                <img 
-                    src="${imageUrl}" 
-                    alt="${album.name}"
-                    class="album-cover"
-                    crossorigin="anonymous" 
-                    onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
-                >
-                <div class="album-info">
-                    <div class="album-name" title="${album.name}">${album.name}</div>
-                    <div class="album-artist" title="${album.artist}">${album.artist}</div>
-                    <div class="album-meta">
-                        <span class="album-rank">#${index + 1}</span>
-                        <span class="album-playcount">${album.playcount.toLocaleString()}</span>
-                        <span class="album-year">${album.release_year || '?'}</span>
-                    </div>
+        const imageUrl = rawUrl 
+            ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
+            : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+
+        card.innerHTML = `
+            <img 
+                src="${imageUrl}" 
+                alt="${displayName}"
+                class="album-cover"
+                crossorigin="anonymous" 
+                onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+            >
+            <div class="album-info">
+                <div class="album-name" title="${displayName}">${displayName}</div>
+                <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
+                <div class="album-meta">
+                    <span class="album-rank">#${index + 1}</span>
+                    <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
+                    <span class="album-year">${album.release_year || '?'}</span>
                 </div>
-            `;
-
-            grid.appendChild(card);
-        });
-    }
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
 
     document.getElementById('downloadBtn').addEventListener('click', async () => {
         const btn = document.getElementById('downloadBtn');
