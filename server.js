@@ -241,7 +241,7 @@ function cleanAlbumName(name) {
   ].join('|');
 
   const bracketRegex = new RegExp(`\\s*[\\(\\[](?:${noiseTerms})[\\)\\]]`, 'gi');
-  const dashRegex = new RegExp(`\\s*-\\s*(?:${noiseTerms})`, 'gi');
+  const dashRegex = new RegExp(`\\s*-\\s*(?:${noiseTerms}).*`, 'gi');
 
   let cleaned = name;
   let prev;
@@ -297,175 +297,161 @@ function stringSimilarity(str1, str2) {
 }
 
 async function getMusicBrainzData(artist, album) {
+  // 1. Clean inputs to strip "Remastered", "Deluxe", etc.
   const cleanedAlbum = cleanAlbumName(album);
   const cleanedArtist = cleanArtistName(artist);
   const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
   
-  if (mbGlobalCache.has(cacheKey)) {
-    return mbGlobalCache.get(cacheKey);
-  }
-
+  // 2. Check Caches
+  if (mbGlobalCache.has(cacheKey)) return mbGlobalCache.get(cacheKey);
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
-    if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
-      return { 
-        musicbrainz_id: null,
-        release_year: null, 
-        type: null,
-        canonical_name: cleanedAlbum,
-        canonical_artist: cleanedArtist
-      };
+    if (Date.now() - failTime < 24 * 60 * 60 * 1000) { // 24hr cooldown
+        return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, release_year: null, musicbrainz_id: null, type: 'Unknown' };
     }
   }
 
   try {
-    // Prioritize the CLEANED names so MusicBrainz looks for the original "Release Group"
-      const queries = [
-        `release:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, // CLEANED FIRST
-        `${cleanedAlbum} ${cleanedArtist}`,                       // BROAD SEARCH SECOND
-        `release:"${album}" AND artist:"${artist}"`               // RAW AS LAST RESORT
-      ];
+    // 3. Search Strategy: release-group (Abstract Album) > release (Specific CD)
+    const queries = [
+        `releasegroup:"${cleanedAlbum}" AND artist:"${cleanedArtist}"`, 
+        `releasegroup:"${cleanedAlbum}" AND artistname:"${cleanedArtist}"`,
+        `${cleanedAlbum} ${cleanedArtist}`
+    ];
     
     let allCandidates = [];
     
+    // 4. Execute Searches
     for (const queryString of queries) {
       const query = encodeURIComponent(queryString);
       const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=15`;
       
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 1100)); // Safety delay
       
       const response = await fetch(mbUrl, {
-        headers: {
-          'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )`
-        }
+        headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )` }
       });
       
-      const data = await response.json();
+      if (!response.ok) continue;
       
+      const data = await response.json();
       if (data['release-groups'] && data['release-groups'].length > 0) {
         allCandidates.push(...data['release-groups']);
-        if (data['release-groups'].length >= 3) break;
+        // If we found a strong match in the first strict query, stop early to save time
+        if (data['release-groups'][0].score === 100) break;
+        if (allCandidates.length >= 25) break;
       }
     }
     
-    if (allCandidates.length > 0) {
-      const uniqueCandidates = Array.from(
-        new Map(allCandidates.map(rg => [rg.id, rg])).values()
-      );
-      
-      const candidates = uniqueCandidates
+    if (allCandidates.length === 0) throw new Error("No candidates found");
+
+    // 5. Deduplicate by ID
+    const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
+
+    const candidates = uniqueCandidates
         .filter(rg => {
           if (!rg['first-release-date']) return false;
-          if (!rg['artist-credit'] || !rg['artist-credit'][0]) return false;
           
-          const rgArtist = rg['artist-credit'][0].name;
+          const rgArtist = rg['artist-credit']?.[0]?.name || "";
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           
-          // 🚀 IMPROVED FILTER: Check similarity AND normalized strings
-          const normRgArtist = normalizeForComparison(rgArtist);
-          const normInputArtist = normalizeForComparison(artist);
+          // 🛡️ GATEKEEPER: Soft Match Check
+          // Fixes "Ms. Lauryn Hill" (0.7 sim) vs "Lauryn Hill"
+          const normRg = normalizeForComparison(rgArtist);
+          const normInput = normalizeForComparison(artist);
+          const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
           
-          // Allow if: Exact match OR very high similarity OR one contains the other (e.g., "Ms. Lauryn Hill" vs "Lauryn Hill")
-          const isBasicallySame = normRgArtist.includes(normInputArtist) || normInputArtist.includes(normRgArtist);
-          
-          if (artistSimilarity < 0.5 && !isBasicallySame) {
-            return false; 
-          }
-          
+          // If similarity is bad (< 0.5) AND it's not a substring match -> REJECT
+          if (artistSimilarity < 0.5 && !isInclusiveMatch) return false;
+
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
           if (titleSimilarity < 0.3) return false;
           
           return true;
         })
-
         .map(rg => {
-          const year = parseInt(rg['first-release-date']?.split('-')[0], 10);
+          const year = parseInt(rg['first-release-date'].split('-')[0], 10);
           const primaryType = rg['primary-type']?.toLowerCase() || null;
           const rgArtist = rg['artist-credit']?.[0]?.name || "";
 
           const artistSimilarity = stringSimilarity(artist, rgArtist);
           const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-
+          
+          // 🧠 SCORING ENGINE
           let score = 0;
-          score += artistSimilarity * 300; 
+          
+          // A. Heavy weighting on Artist (Prevents "Deacon Blue" vs "Arctic Monkeys")
+          score += artistSimilarity * 400; 
           score += titleSimilarity * 200;
 
-          // 🚀 NEW: Strict Title Penalty
-          // If the MusicBrainz title is much longer than our search title, 
-          // it's probably a "Deluxe", "Slowed", or "Fan Collection"
-          if (rg.title.length > cleanedAlbum.length + 10) {
-            score -= 300;
+          // B. Bootleg Detector (Prevents "Tyler SLOW+REVERB")
+          // If the MB title is significantly longer (> 8 chars) than our clean title, penalty.
+          if (rg.title.length > cleanedAlbum.length + 8) {
+             score -= 300;
           }
 
-          if (artistSimilarity < 0.7) score -= 200; 
+          // C. Strict Artist Penalty (Prevents "The Rip-Off Artist")
+          // If not a substring match and sim < 0.8, penalty.
+          const normRg = normalizeForComparison(rgArtist);
+          const normInput = normalizeForComparison(artist);
+          const isInclusiveMatch = normRg.includes(normInput) || normInput.includes(normRg);
+          if (!isInclusiveMatch && artistSimilarity < 0.8) {
+             score -= 200;
+          }
 
+          // D. Boosters
           if (primaryType === 'album') score += 150;
-          else if (primaryType === 'ep') score += 50;
+          if (primaryType === 'ep') score += 50;
+          
+          // Exact Match Bonuses
+          if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) score += 150;
+          if (isInclusiveMatch) score += 150;
 
-          const badSecondaryTypes = ['compilation', 'live', 'soundtrack', 'demo', 'archive', 'bootleg', 'remix'];
+          // E. Bad Types Penalty (Prevents Demos/Live)
+          const badSecondaryTypes = ['compilation', 'live', 'soundtrack', 'demo', 'remix', 'dj-mix'];
           if (rg['secondary-types']?.some(t => badSecondaryTypes.includes(t.toLowerCase()))) {
-            score -= 400; // Increased penalty
+            score -= 400;
           }
 
-          if (normalizeForComparison(rg.title) === normalizeForComparison(cleanedAlbum)) {
-            score += 200; // Increased exact match bonus
-          }
-
-          if (normalizeForComparison(rgArtist) === normalizeForComparison(artist)) {
-            score += 150; 
-          }
-
-          return { ...rg, score, year, artistSimilarity, titleSimilarity, rgArtist };
+          return { ...rg, score, year, rgArtist };
         })
-
-       .sort((a, b) => {
-          // 🚀 EXTREME PRECISION: Only trust the year if it's a near-perfect match 
-          // AND the titles are very similar in length/content
-          if (a.score > 700 && b.score > 700 && Math.abs(a.titleSimilarity - b.titleSimilarity) < 0.05) {
+        .sort((a, b) => {
+          // ⚖️ THE FINAL JUDGMENT
+          
+          // If both candidates are "High Confidence" (> 600), we trust them.
+          // We pick the EARLIEST YEAR (Fixes "The Beatles" 1968 vs 1994).
+          // We set 600 because bad matches (bootlegs, wrong artists) 
+          // have been penalized well below 500 by the logic above.
+          if (a.score > 600 && b.score > 600) {
             return a.year - b.year;
           }
+          
+          // Otherwise, we don't trust the year. We pick the highest score.
+          // (Fixes "Arctic Monkeys" 2006 vs "Deacon Blue" 1993).
           return b.score - a.score;
         });
-      
+
       if (candidates.length > 0) {
         const best = candidates[0];
         const result = {
           musicbrainz_id: best.id,
           release_year: best.year,
-          type: best['primary-type'],
-          canonical_name: cleanAlbumName(best.title),
-          canonical_artist: cleanArtistName(best.rgArtist)
+          type: best['primary-type'] || 'Album',
+          canonical_name: best.title, // Use MB title
+          canonical_artist: best.rgArtist // Use MB artist
         };
-        
         mbGlobalCache.set(cacheKey, result);
         mbFailureCache.delete(cacheKey);
         return result;
       }
-    }
-    
-    mbFailureCache.set(cacheKey, Date.now());
-    
-    const noMatch = { 
-      musicbrainz_id: null,
-      release_year: null, 
-      type: null,
-      canonical_name: cleanedAlbum,
-      canonical_artist: cleanedArtist
-    };
-    mbGlobalCache.set(cacheKey, noMatch);
-    return noMatch;
-    
+      
+      // No match found
+      throw new Error("No suitable candidates after filtering");
+
   } catch (err) {
-    console.error(`MusicBrainz lookup failed for ${artist} - ${album}:`, err.message);
+    console.error(`  ❌ MB Fail: ${cleanedAlbum} - ${err.message}`);
     mbFailureCache.set(cacheKey, Date.now());
-    
-    return { 
-      musicbrainz_id: null,
-      release_year: null, 
-      type: null,
-      canonical_name: cleanedAlbum,
-      canonical_artist: cleanedArtist
-    };
+    return { canonical_name: cleanedAlbum, canonical_artist: cleanedArtist, musicbrainz_id: null, release_year: null, type: 'Unknown' };
   }
 }
 
