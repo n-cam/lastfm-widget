@@ -897,18 +897,23 @@
     });
 
     function sortAndDisplayAlbums() {
-        let sorted = [...currentAlbums];
-        
-        if (currentSort === 'playcount') {
-            sorted.sort((a, b) => b.playcount - a.playcount);
-        } else if (currentSort === 'year') {
-            sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
-        } else if (currentSort === 'name') {
-            sorted.sort((a, b) => a.name.localeCompare(b.name));
-        }
-
-        displayAlbumCards(sorted);
+    let sorted = [...currentAlbums];
+    
+    if (currentSort === 'playcount') {
+        sorted.sort((a, b) => b.playcount - a.playcount);
+    } else if (currentSort === 'year') {
+        sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
+    } else if (currentSort === 'name') {
+        // Use the stylized name for sorting too!
+        sorted.sort((a, b) => {
+            const nameA = a.album_name || a.name || "";
+            const nameB = b.album_name || b.name || "";
+            return nameA.localeCompare(nameB);
+        });
     }
+
+    displayAlbumCards(sorted);
+}
 
     function displayResults(username, filterText, count) {
         document.getElementById('resultsTitle').textContent = `🎵 ${username}'s top albums`;
