@@ -487,7 +487,7 @@ async function getMusicBrainzData(artist, album) {
     }
   }
 
-  const DEBUG = true; // TEMPORARILY ENABLED for testing
+  const DEBUG = false; // TEMPORARILY ENABLED for testing
   if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
 
   try {
