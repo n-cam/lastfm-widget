@@ -1136,6 +1136,9 @@
 
         currentFilter = filterText;
         currentRange = { start: 0, end: 500 };
+        
+        // Clear previous results
+        currentAlbums = [];
 
         hideAll();
         
@@ -1191,7 +1194,7 @@
 
     async function performProgressiveScan() {
         isInitialScanActive = true;
-        currentAlbums = [];
+        // currentAlbums already cleared in submit handler
         
         document.getElementById('submitBtn').disabled = true;
         document.getElementById('initialScanProgress').style.display = 'block';
