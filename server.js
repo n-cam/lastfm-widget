@@ -1552,12 +1552,21 @@ app.post('/api/scan-more', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'Missing required parameters' });
   }
   
+  // Fix: Cancel any existing jobs for this user instead of blocking
   for (const [existingJobId, existingJob] of scanJobs.entries()) {
     if (existingJob.username === username && existingJob.status === 'processing') {
-      return res.status(409).json({ 
-        error: 'Scan already in progress',
-        jobId: existingJobId 
+      // Mark old job as stopped
+      existingJob.shouldStop = true;
+      existingJob.status = 'stopped';
+      
+      // Close existing clients
+      existingJob.clients.forEach(client => {
+        try { client.end(); } catch (e) {}
       });
+      
+      // Remove from map
+      scanJobs.delete(existingJobId);
+      console.log(`⚠️ Cancelled previous job ${existingJobId} for user ${username}`);
     }
   }
   

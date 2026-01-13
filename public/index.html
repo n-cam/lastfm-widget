@@ -1201,89 +1201,109 @@
         document.getElementById('results').style.display = 'block';
         displayResults(currentUsername, currentFilter, 0);
         
+        // Prepare filters for the job
         const activeFilter = document.querySelector('.tab.active').dataset.filter;
-        
-        let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
+        let filters = {};
         
         if (activeFilter === 'year') {
             const year = document.getElementById('year').value;
-            if (year) url += `&year=${year}`;
+            if (year) filters.year = parseInt(year);
         } else if (activeFilter === 'decade') {
             const decade = document.getElementById('decade').value;
-            if (decade) url += `&decade=${decade}`;
+            if (decade) filters.decade = parseInt(decade);
         } else if (activeFilter === 'range') {
             const yearStart = document.getElementById('yearStart').value;
             const yearEnd = document.getElementById('yearEnd').value;
-            if (yearStart && yearEnd) url += `&yearStart=${yearStart}&yearEnd=${yearEnd}`;
+            if (yearStart && yearEnd) {
+                filters.yearStart = parseInt(yearStart);
+                filters.yearEnd = parseInt(yearEnd);
+            }
         }
-        
-        initialScanAbortController = new AbortController();
-        
-        // Simulate progress while backend processes
-        const progressInterval = setInterval(() => {
-            const current = parseInt(document.getElementById('initialScanned').textContent) || 0;
-            if (current < 450) {
-                updateInitialScanProgress({
-                    scanned: current + 10,
-                    total: 500,
-                    found: currentAlbums.length,
-                    message: 'Scanning your library...'
-                });
-            }
-        }, 500);
-        
-        try {
-            const response = await fetch(url, { signal: initialScanAbortController.signal });
-            
-            clearInterval(progressInterval);
-            
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
-            }
 
-            const data = await response.json();
-            
-            updateInitialScanProgress({
-                scanned: 500,
-                total: 500,
-                found: data.albums.length,
-                message: 'Complete!'
+        // Reset UI
+        updateInitialScanProgress({
+            scanned: 0,
+            total: 500,
+            found: 0,
+            message: 'Initializing scan...'
+        });
+
+        try {
+            // 1. Start the Job
+            const response = await fetch('/api/scan-more', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: currentUsername,
+                    startRange: 0,
+                    endRange: 500,
+                    filters: filters,
+                    targetLimit: currentLimit,
+                    currentCount: 0
+                })
             });
-            
-            // Show albums with animation
-            if (data.albums && data.albums.length > 0) {
-                for (const album of data.albums) {
-                    currentAlbums.push(album);
-                    addAlbumToGrid(album, currentAlbums.length - 1);
-                    await new Promise(r => setTimeout(r, 50)); // Stagger animations
-                }
-            }
-            
-            setTimeout(() => {
-                document.getElementById('initialScanProgress').style.display = 'none';
-                document.getElementById('stopEarlySection').style.display = 'none';
-                document.getElementById('submitBtn').disabled = false;
-                isInitialScanActive = false;
+
+            if (!response.ok) throw new Error('Failed to start scan');
+            const data = await response.json();
+            activeScanJobId = data.jobId;
+
+            // 2. Connect to the stream
+            scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
+
+            scanEventSource.onmessage = (event) => {
+                const jobData = JSON.parse(event.data);
                 
-                displayResults(currentUsername, currentFilter, currentAlbums.length);
-                
-                if (currentAlbums.length < currentLimit) {
-                    showInsufficientResults();
+                // Update Progress UI
+                updateInitialScanProgress({
+                    scanned: jobData.progress.current,
+                    total: 500,
+                    found: jobData.foundAlbums.length,
+                    message: jobData.timeRemaining ? `Estimated time: ${jobData.timeRemaining}` : 'Scanning...'
+                });
+
+                // Live Update of Grid
+                if (jobData.foundAlbums && jobData.foundAlbums.length > currentAlbums.length) {
+                    const newAlbums = jobData.foundAlbums.slice(currentAlbums.length);
+                    for (const album of newAlbums) {
+                        currentAlbums.push(album);
+                        addAlbumToGrid(album, currentAlbums.length - 1);
+                    }
+                    // Update header count
+                    displayResults(currentUsername, currentFilter, currentAlbums.length);
                 }
-            }, 1000);
-            
+
+                // Handle Completion
+                if (jobData.status === 'complete' || jobData.status === 'stopped' || jobData.status === 'error') {
+                    scanEventSource.close();
+                    scanEventSource = null;
+                    finishInitialScan(jobData.status === 'error' ? jobData.error : null);
+                }
+            };
+
+            scanEventSource.onerror = () => {
+                if (scanEventSource) scanEventSource.close();
+                finishInitialScan('Connection lost');
+            };
+
         } catch (err) {
-            clearInterval(progressInterval);
-            document.getElementById('initialScanProgress').style.display = 'none';
-            document.getElementById('stopEarlySection').style.display = 'none';
-            document.getElementById('submitBtn').disabled = false;
-            isInitialScanActive = false;
-            
-            if (err.name === 'AbortError') {
-                showError('Scan cancelled');
-            } else {
-                showError(err.message);
+            finishInitialScan(err.message);
+        }
+    }
+
+    function finishInitialScan(error) {
+        document.getElementById('initialScanProgress').style.display = 'none';
+        document.getElementById('submitBtn').disabled = false;
+        isInitialScanActive = false;
+        activeScanJobId = null;
+
+        if (error) {
+            showError(error);
+        } else {
+            // Check if we need to show the "Not enough results" card
+            if (currentAlbums.length < currentLimit) {
+                // Update range end so the "Scan More" button knows where to start next
+                currentRange.end = 500; 
+                showInsufficientResults();
             }
         }
     }
@@ -1352,13 +1372,18 @@
         };
     }
 
-    document.getElementById('stopEarlyBtn').addEventListener('click', () => {
-        if (isInitialScanActive && initialScanAbortController) {
-            initialScanAbortController.abort();
-            document.getElementById('initialScanProgress').style.display = 'none';
-            document.getElementById('stopEarlySection').style.display = 'none';
-            document.getElementById('submitBtn').disabled = false;
-            isInitialScanActive = false;
+   document.getElementById('stopEarlyBtn').addEventListener('click', async () => {
+        if (isInitialScanActive && activeScanJobId) {
+            try {
+                // Tell server to stop the job
+                await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
+            } catch (e) { console.error(e); }
+
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+            }
+            finishInitialScan();
         }
     });
 
