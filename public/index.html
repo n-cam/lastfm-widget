@@ -191,22 +191,6 @@
             gap: 12px;
         }
 
-        .info-bar {
-            background: rgba(240, 144, 181, 0.2);
-            border: 2px solid var(--primary);
-            padding: 12px 16px;
-            border-radius: 8px;
-            font-size: 11px;
-            color: var(--primary);
-            margin-bottom: 16px;
-        }
-
-        .info-bar a {
-            color: var(--primary);
-            font-weight: 700;
-            text-decoration: underline;
-        }
-
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -321,7 +305,6 @@
             box-shadow: inset 2px 2px 4px rgba(0,0,0,0.1);
         }
 
-        /* View Toggle */
         .view-toggle {
             display: flex;
             gap: 6px;
@@ -352,7 +335,6 @@
             color: white;
         }
 
-        /* Albums Grid - Card View */
         .albums-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -449,7 +431,6 @@
             font-weight: 600;
         }
 
-        /* Collage View */
         body.collage-view .albums-grid {
             gap: 0;
         }
@@ -469,7 +450,6 @@
             display: none;
         }
 
-        /* Download Button */
         .download-section {
             margin-top: 20px;
             padding-top: 20px;
@@ -494,6 +474,158 @@
             margin-bottom: 8px;
         }
 
+        /* Scan Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            animation: fadeIn 0.2s;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .scan-modal {
+            background: white;
+            border: 3px solid var(--primary);
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 8px 8px 0 var(--primary);
+            animation: slideUp 0.3s;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .scan-modal-header {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .scan-modal-body {
+            color: var(--primary);
+            margin-bottom: 24px;
+        }
+
+        .scan-progress-bar {
+            background: var(--base);
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            height: 32px;
+            overflow: hidden;
+            margin: 16px 0;
+            position: relative;
+        }
+
+        .scan-progress-fill {
+            background: var(--contrast);
+            height: 100%;
+            transition: width 0.3s ease;
+            border-right: 2px solid var(--primary);
+        }
+
+        .scan-progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: 700;
+            font-size: 11px;
+            color: var(--primary);
+        }
+
+        .scan-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin: 16px 0;
+        }
+
+        .scan-stat {
+            background: rgba(240, 144, 181, 0.2);
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .scan-stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }
+
+        .scan-stat-label {
+            font-size: 10px;
+            opacity: 0.7;
+            text-transform: uppercase;
+        }
+
+        .scan-modal-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .scan-modal-actions .btn {
+            flex: 1;
+        }
+
+        .insufficient-results-card {
+            background: rgba(255, 107, 107, 0.1);
+            border: 2px solid var(--primary);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .insufficient-results-card h3 {
+            color: var(--primary);
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+
+        .insufficient-results-card p {
+            color: var(--primary);
+            opacity: 0.8;
+            margin-bottom: 16px;
+            font-size: 12px;
+        }
+
+        .scan-more-info {
+            background: rgba(196, 224, 224, 0.5);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 16px;
+            font-size: 11px;
+            color: var(--primary);
+            opacity: 0.9;
+        }
+
         .footer {
             text-align: center;
             padding: 20px;
@@ -513,10 +645,6 @@
                 padding: 12px;
             }
 
-            h1 {
-                font-size: 18px;
-            }
-
             .section {
                 padding: 18px;
             }
@@ -532,16 +660,6 @@
                 box-shadow: 2px 2px 0 var(--primary);
             }
 
-            .album-meta {
-                font-size: 8px;
-                gap: 2px;
-            }
-
-            .album-rank {
-                font-size: 8px;
-                padding: 3px 6px;
-            }
-
             .filter-tabs {
                 flex-direction: column;
             }
@@ -552,6 +670,10 @@
 
             .options-row {
                 grid-template-columns: 1fr;
+            }
+
+            .scan-modal {
+                padding: 20px;
             }
         }
     </style>
@@ -694,11 +816,23 @@
                 </div>
 
                 <div class="view-toggle">
-                    <button class="view-btn active" data-view="card">🃏 card view</button>
-                    <button class="view-btn" data-view="collage">🖼️ collage view</button>
+                    <button class="view-btn active" data-view="card">card view</button>
+                    <button class="view-btn" data-view="collage">collage view</button>
                 </div>
 
                 <div id="albumsGrid" class="albums-grid"></div>
+
+                <div id="insufficientResults" class="insufficient-results-card" style="display: none;">
+                    <h3>⚠️ Not enough albums found</h3>
+                    <p id="insufficientText">Found <span id="foundCount">0</span> of <span id="targetCount">0</span> albums</p>
+                    <div class="scan-more-info">
+                        Scanning deeper will check albums <span id="nextRangeText">501-1000</span> in your library. This typically takes 8-12 minutes.
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <button class="btn btn-primary" id="scanMoreBtn">🔍 Scan More Albums</button>
+                        <button class="btn btn-secondary" id="skipScanBtn">Skip</button>
+                    </div>
+                </div>
 
                 <div class="download-section">
                     <button class="btn download-btn" id="downloadBtn">
@@ -720,6 +854,40 @@
         </div>
     </div>
 
+    <!-- Scan Progress Modal -->
+    <div id="scanModal" class="modal-overlay">
+        <div class="scan-modal">
+            <div class="scan-modal-header">
+                <span id="scanIcon">🔍</span>
+                <span id="scanTitle">Scanning Albums...</span>
+            </div>
+            <div class="scan-modal-body">
+                <div class="scan-stats">
+                    <div class="scan-stat">
+                        <div class="scan-stat-value" id="scanProgress">0%</div>
+                        <div class="scan-stat-label">Progress</div>
+                    </div>
+                    <div class="scan-stat">
+                        <div class="scan-stat-value" id="scanNewFound">0</div>
+                        <div class="scan-stat-label">New Found</div>
+                    </div>
+                </div>
+                
+                <div class="scan-progress-bar">
+                    <div class="scan-progress-fill" id="progressFill" style="width: 0%"></div>
+                    <div class="scan-progress-text" id="progressText">Starting...</div>
+                </div>
+                
+                <p style="font-size: 11px; opacity: 0.7; text-align: center;" id="scanETA">
+                    Estimating time...
+                </p>
+            </div>
+            <div class="scan-modal-actions">
+                <button class="btn btn-secondary" id="stopScanBtn">⏸️ Stop Scan</button>
+            </div>
+        </div>
+    </div>
+
     <script>
     const API_URL = '/api/top-albums';
     const STATS_URL = '/api/cache/stats';
@@ -728,6 +896,11 @@
     let currentSort = 'playcount';
     let currentView = 'card';
     let currentFilter = '';
+    let currentUsername = '';
+    let currentLimit = 20;
+    let currentRange = { start: 0, end: 500 };
+    let activeScanJobId = null;
+    let scanEventSource = null;
 
     // Filter tabs
     document.querySelectorAll('.tab').forEach(tab => {
@@ -752,10 +925,10 @@
             
             if (currentView === 'collage') {
                 document.body.classList.add('collage-view');
-                document.getElementById('downloadType').textContent = 'collage';
+                document.getElementById('downloadType').textContent = 'Collage';
             } else {
                 document.body.classList.remove('collage-view');
-                document.getElementById('downloadType').textContent = 'cards';
+                document.getElementById('downloadType').textContent = 'Cards';
             }
         });
     });
@@ -764,11 +937,11 @@
     document.getElementById('searchForm').addEventListener('submit', async (e) => {
         e.preventDefault();
 
-        const username = document.getElementById('username').value.trim();
+        currentUsername = document.getElementById('username').value.trim();
         const activeFilter = document.querySelector('.tab.active').dataset.filter;
-        const limit = document.getElementById('limit').value;
+        currentLimit = parseInt(document.getElementById('limit').value);
 
-        let url = `${API_URL}?user=${encodeURIComponent(username)}&limit=${limit}`;
+        let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
         let filterText = 'all time';
 
         if (activeFilter === 'year') {
@@ -793,6 +966,7 @@
         }
 
         currentFilter = filterText;
+        currentRange = { start: 0, end: 500 };
 
         hideAll();
         document.getElementById('loading').style.display = 'block';
@@ -807,7 +981,7 @@
         }
 
         try {
-            await fetchStats(username);
+            await fetchStats(currentUsername);
 
             const response = await fetch(url);
             
@@ -834,8 +1008,13 @@
 
             if (albums && albums.length > 0) {
                 currentAlbums = albums;
-                displayResults(username, filterText, albums.length);
+                displayResults(currentUsername, filterText, albums.length);
                 sortAndDisplayAlbums();
+                
+                // Check if we need more scanning
+                if (currentAlbums.length < currentLimit && currentRange.end === 500) {
+                    showInsufficientResults();
+                }
             } else {
                 document.getElementById('noResults').style.display = 'block';
             }
@@ -887,6 +1066,7 @@
         document.getElementById('statsCard').style.display = 'block';
     }
 
+    // Sort buttons
     document.querySelectorAll('.sort-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
@@ -898,28 +1078,24 @@
     });
 
     function sortAndDisplayAlbums() {
-    // Create a fresh copy to avoid mutating original data
-    let sorted = currentAlbums.map(album => {
-        return {
-            ...album,
-            // FORCE the display properties to exist based on your DB columns
-            displayName: album.album_name || album.name || album.canonical_album,
-            displayArtist: album.artist_name || album.artist || album.canonical_artist
-        };
-    });
-    
-    // 1. Sort logic
-    if (currentSort === 'playcount') {
-        sorted.sort((a, b) => (b.playcount || 0) - (a.playcount || 0));
-    } else if (currentSort === 'year') {
-        sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
-    } else if (currentSort === 'name') {
-        sorted.sort((a, b) => a.displayName.localeCompare(b.displayName));
-    }
+        let sorted = currentAlbums.map(album => {
+            return {
+                ...album,
+                displayName: album.album_name || album.name || album.canonical_album,
+                displayArtist: album.artist_name || album.artist || album.canonical_artist
+            };
+        });
+        
+        if (currentSort === 'playcount') {
+            sorted.sort((a, b) => (b.playcount || 0) - (a.playcount || 0));
+        } else if (currentSort === 'year') {
+            sorted.sort((a, b) => (b.release_year || 0) - (a.release_year || 0));
+        } else if (currentSort === 'name') {
+            sorted.sort((a, b) => a.displayName.localeCompare(b.displayName));
+        }
 
-    // 2. Pass the explicitly mapped albums to the cards
-    displayAlbumCards(sorted);
-}
+        displayAlbumCards(sorted);
+    }
 
     function displayResults(username, filterText, count) {
         document.getElementById('resultsTitle').textContent = `🎵 ${username}'s top albums`;
@@ -928,51 +1104,226 @@
     }
 
     function displayAlbumCards(albums) {
-    const grid = document.getElementById('albumsGrid');
-    grid.innerHTML = '';
+        const grid = document.getElementById('albumsGrid');
+        grid.innerHTML = '';
 
-    albums.forEach((album, index) => {
-        const card = document.createElement('div');
-        card.className = 'album-card';
-        
-        // 1. Order of priority: Original DB names -> Canonical -> Last.fm fallback
-        const displayName = album.album_name || album.name || album.canonical_album || 'Unknown Album';
-        const displayArtist = album.artist_name || album.artist || album.canonical_artist || 'Unknown Artist';
-        const displayUrl = album.url || album.lastfm_url || '#';
+        albums.forEach((album, index) => {
+            const card = document.createElement('div');
+            card.className = 'album-card';
+            
+            const displayName = album.album_name || album.name || album.canonical_album || 'Unknown Album';
+            const displayArtist = album.artist_name || album.artist || album.canonical_artist || 'Unknown Artist';
+            const displayUrl = album.url || album.lastfm_url || '#';
 
-        card.onclick = () => {
-            if (displayUrl !== '#') window.open(displayUrl, '_blank');
-        };
+            card.onclick = () => {
+                if (displayUrl !== '#') window.open(displayUrl, '_blank');
+            };
 
-        const rawUrl = (album.image && album.image.length > 5) ? album.image : 
-                    (album.image_url && album.image_url.length > 5) ? album.image_url : null;
+            const rawUrl = (album.image && album.image.length > 5) ? album.image : 
+                        (album.image_url && album.image_url.length > 5) ? album.image_url : null;
 
-        const imageUrl = rawUrl 
-            ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
-            : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+            const imageUrl = rawUrl 
+                ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
+                : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
 
-        card.innerHTML = `
-            <img 
-                src="${imageUrl}" 
-                alt="${displayName}"
-                class="album-cover"
-                crossorigin="anonymous" 
-                onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
-            >
-            <div class="album-info">
-                <div class="album-name" title="${displayName}">${displayName}</div>
-                <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
-                <div class="album-meta">
-                    <span class="album-rank">#${index + 1}</span>
-                    <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
-                    <span class="album-year">${album.release_year || '?'}</span>
+            card.innerHTML = `
+                <img 
+                    src="${imageUrl}" 
+                    alt="${displayName}"
+                    class="album-cover"
+                    crossorigin="anonymous" 
+                    onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+                >
+                <div class="album-info">
+                    <div class="album-name" title="${displayName}">${displayName}</div>
+                    <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
+                    <div class="album-meta">
+                        <span class="album-rank">#${index + 1}</span>
+                        <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
+                        <span class="album-year">${album.release_year || '?'}</span>
+                    </div>
                 </div>
-            </div>
-        `;
-        grid.appendChild(card);
-    });
-}
+            `;
+            grid.appendChild(card);
+        });
+    }
 
+    // Progressive Scanning
+    function showInsufficientResults() {
+        const card = document.getElementById('insufficientResults');
+        document.getElementById('foundCount').textContent = currentAlbums.length;
+        document.getElementById('targetCount').textContent = currentLimit;
+        
+        const nextStart = currentRange.end + 1;
+        const nextEnd = currentRange.end + 500;
+        document.getElementById('nextRangeText').textContent = `${nextStart}-${nextEnd}`;
+        
+        card.style.display = 'block';
+    }
+
+    document.getElementById('scanMoreBtn').addEventListener('click', async () => {
+        const nextStart = currentRange.end + 1;
+        const nextEnd = currentRange.end + 500;
+        
+        const activeFilter = document.querySelector('.tab.active').dataset.filter;
+        let filters = {};
+        
+        if (activeFilter === 'year') {
+            const year = document.getElementById('year').value;
+            if (year) filters.year = parseInt(year);
+        } else if (activeFilter === 'decade') {
+            const decade = document.getElementById('decade').value;
+            if (decade) filters.decade = parseInt(decade);
+        } else if (activeFilter === 'range') {
+            const yearStart = document.getElementById('yearStart').value;
+            const yearEnd = document.getElementById('yearEnd').value;
+            if (yearStart && yearEnd) {
+                filters.yearStart = parseInt(yearStart);
+                filters.yearEnd = parseInt(yearEnd);
+            }
+        }
+        
+        try {
+            const response = await fetch('/api/scan-more', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: currentUsername,
+                    startRange: nextStart,
+                    endRange: nextEnd,
+                    filters: filters,
+                    targetLimit: currentLimit,
+                    currentCount: currentAlbums.length
+                })
+            });
+            
+            if (!response.ok) throw new Error('Failed to start scan');
+            
+            const data = await response.json();
+            activeScanJobId = data.jobId;
+            
+            document.getElementById('insufficientResults').style.display = 'none';
+            showScanModal();
+            connectToScanStream();
+            
+        } catch (err) {
+            showError('Failed to start scan: ' + err.message);
+        }
+    });
+
+    document.getElementById('skipScanBtn').addEventListener('click', () => {
+        document.getElementById('insufficientResults').style.display = 'none';
+    });
+
+    document.getElementById('stopScanBtn').addEventListener('click', async () => {
+        if (!activeScanJobId) return;
+        
+        try {
+            const response = await fetch(`/api/scan-stop/${activeScanJobId}`, {
+                method: 'POST'
+            });
+            
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+            }
+            
+        } catch (err) {
+            console.error('Failed to stop scan:', err);
+        }
+    });
+
+    function showScanModal() {
+        document.getElementById('scanModal').classList.add('active');
+        document.getElementById('scanIcon').textContent = '🔍';
+        document.getElementById('scanTitle').textContent = 'Scanning Albums...';
+        document.getElementById('progressFill').style.width = '0%';
+        document.getElementById('progressText').textContent = 'Starting...';
+        document.getElementById('scanProgress').textContent = '0%';
+        document.getElementById('scanNewFound').textContent = '0';
+        document.getElementById('scanETA').textContent = 'Estimating time...';
+    }
+
+    function connectToScanStream() {
+        scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
+        
+        scanEventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            updateScanProgress(data);
+            
+            if (data.status === 'complete' || data.status === 'stopped' || data.status === 'error') {
+                scanEventSource.close();
+                scanEventSource = null;
+                handleScanComplete(data);
+            }
+        };
+        
+        scanEventSource.onerror = () => {
+            console.error('SSE connection error');
+            scanEventSource.close();
+            scanEventSource = null;
+        };
+    }
+
+    function updateScanProgress(data) {
+        const percentage = data.progress.percentage || 0;
+        
+        document.getElementById('progressFill').style.width = `${percentage}%`;
+        document.getElementById('progressText').textContent = 
+            `${data.progress.current} / ${data.progress.total} albums`;
+        document.getElementById('scanProgress').textContent = `${percentage}%`;
+        document.getElementById('scanNewFound').textContent = data.newAlbumsCount || 0;
+        
+        if (data.timeRemaining) {
+            document.getElementById('scanETA').textContent = 
+                `⏱️ ${data.timeRemaining} remaining`;
+        }
+        
+        // Add new albums to display in real-time
+        if (data.foundAlbums && data.foundAlbums.length > currentAlbums.length) {
+            const newAlbums = data.foundAlbums.slice(currentAlbums.length);
+            currentAlbums.push(...newAlbums);
+            sortAndDisplayAlbums();
+        }
+    }
+
+    function handleScanComplete(data) {
+        if (data.status === 'complete') {
+            document.getElementById('scanIcon').textContent = '✅';
+            document.getElementById('scanTitle').textContent = 'Scan Complete!';
+            document.getElementById('stopScanBtn').textContent = '✅ Done';
+            
+            setTimeout(() => {
+                document.getElementById('scanModal').classList.remove('active');
+            }, 2000);
+            
+        } else if (data.status === 'stopped') {
+            document.getElementById('scanIcon').textContent = '⏸️';
+            document.getElementById('scanTitle').textContent = 'Scan Stopped';
+            document.getElementById('stopScanBtn').textContent = 'Close';
+            
+        } else if (data.status === 'error') {
+            document.getElementById('scanIcon').textContent = '❌';
+            document.getElementById('scanTitle').textContent = 'Scan Error';
+            showError(data.error || 'Scan failed');
+        }
+        
+        activeScanJobId = null;
+        currentRange.end += 500;
+        
+        // Update results subtitle
+        displayResults(currentUsername, currentFilter, currentAlbums.length);
+        
+        // Check if we still need more
+        if (currentAlbums.length < currentLimit && currentRange.end < 2000) {
+            setTimeout(() => {
+                document.getElementById('scanModal').classList.remove('active');
+                showInsufficientResults();
+            }, 3000);
+        }
+    }
+
+    // Download functionality
     document.getElementById('downloadBtn').addEventListener('click', async () => {
         const btn = document.getElementById('downloadBtn');
         btn.disabled = true;
@@ -989,28 +1340,22 @@
             alert('Failed to generate image. Please try again.');
         } finally {
             btn.disabled = false;
-            btn.innerHTML = `📸 Download <span id="downloadType">${currentView === 'Card' ? 'Cards' : 'collage'}</span>`;
+            btn.innerHTML = `📸 Download <span id="downloadType">${currentView === 'card' ? 'Cards' : 'Collage'}</span>`;
         }
     });
-
-    // Download functionality
 
     async function downloadCardView() {
         const username = document.getElementById('username').value.trim();
         const grid = document.getElementById('albumsGrid');
         const count = currentAlbums.length;
 
-    // Create a wrapper div with title and grid
         const wrapper = document.createElement('div');
         wrapper.style.backgroundColor = '#C4E0E0';
         wrapper.style.padding = '40px';
         wrapper.style.fontFamily = '"Martian Mono", monospace';
-
-    // 🔒 LOCK WIDTH TO MATCH WIDGET (THIS FIXES 4 vs 5 COLUMNS)
         wrapper.style.width = '1400px';
         wrapper.style.maxWidth = '1400px';
 
-        // Add title
         const title = document.createElement('div');
         title.style.textAlign = 'center';
         title.style.marginBottom = '30px';
@@ -1021,17 +1366,11 @@
         `;
         wrapper.appendChild(title);
 
-        // Clone the grid
         const gridClone = grid.cloneNode(true);
         gridClone.style.backgroundColor = 'transparent';
-
-        // 🔒 FORCE 5-COLUMN GRID (BELT + SUSPENDERS)
         gridClone.style.gridTemplateColumns = 'repeat(5, 1fr)';
-
         wrapper.appendChild(gridClone);
 
-        
-        // Add watermark
         const watermark = document.createElement('div');
         watermark.style.textAlign = 'center';
         watermark.style.marginTop = '30px';
@@ -1040,12 +1379,10 @@
         watermark.textContent = 'sortedsongs.com/tools/album-explorer';
         wrapper.appendChild(watermark);
         
-        // Temporarily add to document
         wrapper.style.position = 'absolute';
         wrapper.style.left = '-9999px';
         document.body.appendChild(wrapper);
         
-        // Use html2canvas to capture the wrapper
         const canvas = await html2canvas(wrapper, {
             backgroundColor: '#C4E0E0',
             scale: 2,
@@ -1055,10 +1392,8 @@
             height: wrapper.offsetHeight
         });
         
-        // Remove wrapper
         document.body.removeChild(wrapper);
 
-        // Download
         downloadCanvas(canvas, `${username}_cards_${currentFilter.replace(/\s+/g, '_')}.png`);
     }
 
@@ -1067,47 +1402,40 @@
         const albums = currentAlbums;
         const count = albums.length;
         
-        // Determine grid dimensions
         let cols, rows;
         if (count === 4) {
             cols = 2; rows = 2;
         } else if (count === 10) {
-            cols = 5; rows = 2; // Landscape
+            cols = 5; rows = 2;
         } else if (count === 20) {
             cols = 5; rows = 4;
         } else {
-            // Fallback for other counts
             cols = Math.ceil(Math.sqrt(count));
             rows = Math.ceil(count / cols);
         }
 
-        const albumSize = 400; // 400px per album for 2000px wide image
+        const albumSize = 400;
         const headerHeight = 120;
         const footerHeight = 60;
-        const padding = 40;
 
         const canvas = document.createElement('canvas');
         canvas.width = cols * albumSize;
         canvas.height = rows * albumSize + headerHeight + footerHeight;
         const ctx = canvas.getContext('2d');
 
-        // Background
         ctx.fillStyle = '#C4E0E0';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Header text
         ctx.fillStyle = '#4A1DC0';
         ctx.font = 'bold 48px "Martian Mono"';
         ctx.textAlign = 'center';
         ctx.fillText(`My Top ${count} Albums of ${currentFilter}`, canvas.width / 2, 70);
 
-        // Load and draw album covers
         const imagePromises = albums.slice(0, count).map((album, index) => {
             return new Promise((resolve) => {
                 const img = new Image();
                 img.crossOrigin = 'anonymous';
                 
-                // Use our new proxy logic
                 const rawUrl = album.image || album.image_url;
                 
                 img.onload = () => {
@@ -1133,7 +1461,6 @@
                     resolve();
                 };
                 
-                // USE PROXY HERE
                 if (rawUrl && rawUrl.length > 5) {
                     img.src = `/api/proxy-image?url=${encodeURIComponent(rawUrl)}`;
                 } else {
@@ -1144,13 +1471,11 @@
 
         await Promise.all(imagePromises);
 
-        // Footer watermark
         ctx.fillStyle = '#4A1DC0';
         ctx.font = '18px "Martian Mono"';
         ctx.textAlign = 'center';
         ctx.fillText('sortedsongs.com/tools/album-explorer', canvas.width / 2, canvas.height - 25);
 
-        // Download
         downloadCanvas(canvas, `${username}_collage_${currentFilter.replace(/\s+/g, '_')}.png`);
     }
 
@@ -1169,6 +1494,7 @@
         document.getElementById('error').style.display = 'none';
         document.getElementById('results').style.display = 'none';
         document.getElementById('noResults').style.display = 'none';
+        document.getElementById('insufficientResults').style.display = 'none';
     }
 
     function showError(message) {

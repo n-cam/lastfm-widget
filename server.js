@@ -6,6 +6,7 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const AbortController = require('abort-controller');
+const { v4: uuidv4 } = require('uuid'); // Add this to dependencies
 
 // ==========================================
 // 🚀 SHORT-TERM REQUEST CACHE
@@ -64,6 +65,91 @@ if (process.env.DATABASE_URL) {
 }
 
 const CACHED_USERS = (process.env.CACHED_USERS || '').split(',').filter(Boolean);
+
+// ==========================================
+// 🔍 PROGRESSIVE SCAN JOB TRACKING
+// ==========================================
+const scanJobs = new Map();
+
+function createScanJob(username, filters, startRange, endRange, targetLimit, currentCount) {
+  const jobId = uuidv4();
+  scanJobs.set(jobId, {
+    jobId,
+    status: 'processing',
+    username,
+    filters,
+    startRange,
+    endRange,
+    targetLimit,
+    currentCount,
+    progress: { current: 0, total: endRange - startRange, percentage: 0 },
+    foundAlbums: [],
+    clients: [],
+    createdAt: Date.now(),
+    lastUpdate: Date.now(),
+    shouldStop: false
+  });
+  
+  setTimeout(() => {
+    const job = scanJobs.get(jobId);
+    if (job) {
+      job.clients.forEach(client => client.end());
+      scanJobs.delete(jobId);
+    }
+  }, 60 * 60 * 1000);
+  
+  return jobId;
+}
+
+function updateJobProgress(jobId, update) {
+  const job = scanJobs.get(jobId);
+  if (!job) return;
+  
+  Object.assign(job, update);
+  job.lastUpdate = Date.now();
+  
+  const message = JSON.stringify({
+    status: job.status,
+    progress: job.progress,
+    foundAlbums: job.foundAlbums,
+    newAlbumsCount: job.foundAlbums.length,
+    timeRemaining: estimateTimeRemaining(job)
+  });
+  
+  job.clients.forEach(client => {
+    try {
+      client.write(`data: ${message}\n\n`);
+    } catch (e) {
+      // Client disconnected
+    }
+  });
+}
+
+function estimateTimeRemaining(job) {
+  if (job.progress.current === 0) return null;
+  
+  const elapsed = Date.now() - job.createdAt;
+  const rate = elapsed / job.progress.current;
+  const remaining = (job.progress.total - job.progress.current) * rate;
+  
+  const minutes = Math.ceil(remaining / 60000);
+  if (minutes < 1) return '< 1 minute';
+  if (minutes === 1) return '1 minute';
+  return `${minutes} minutes`;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of scanJobs.entries()) {
+    if ((job.status === 'complete' || job.status === 'stopped' || job.status === 'error') 
+        && now - job.lastUpdate > 5 * 60 * 1000) {
+      job.clients.forEach(client => {
+        try { client.end(); } catch (e) {}
+      });
+      scanJobs.delete(jobId);
+    }
+  }
+}, 60000);
 
 // Initialize clean database schema
 async function initDatabase() {
@@ -856,6 +942,145 @@ async function performBackgroundUpdate(username, full, limit) {
   }
 }
 
+async function performProgressiveScan(jobId) {
+  const job = scanJobs.get(jobId);
+  if (!job) return;
+  
+  const { username, startRange, endRange, filters, targetLimit, currentCount } = job;
+  
+  console.log(`\n🔍 Starting progressive scan: ${username} | Range: ${startRange}-${endRange}`);
+  
+  try {
+    const perPage = 500;
+    const startPage = Math.ceil(startRange / perPage);
+    const endPage = Math.ceil(endRange / perPage);
+    
+    let albumIndex = startRange;
+    
+    for (let page = startPage; page <= endPage; page++) {
+      if (job.shouldStop) {
+        console.log(`  ⏸️  Scan stopped by user at album ${albumIndex}`);
+        break;
+      }
+      
+      const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
+      
+      let pageData;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      
+      try {
+        const response = await fetch(lastfmUrl, { signal: controller.signal });
+        clearTimeout(timeout);
+        
+        if (!response.ok) throw new Error(`Last.fm API error: ${response.status}`);
+        
+        pageData = await response.json();
+      } catch (err) {
+        clearTimeout(timeout);
+        updateJobProgress(jobId, { 
+          status: 'error',
+          error: `Failed to fetch page ${page}: ${err.message}`
+        });
+        return;
+      }
+      
+      if (!pageData.topalbums || !pageData.topalbums.album) break;
+      
+      const albums = Array.isArray(pageData.topalbums.album) 
+        ? pageData.topalbums.album 
+        : [pageData.topalbums.album];
+      
+      for (const a of albums) {
+        if (job.shouldStop) break;
+        if (albumIndex < startRange) {
+          albumIndex++;
+          continue;
+        }
+        if (albumIndex >= endRange) break;
+        
+        const mbData = await getMusicBrainzData(a.artist.name, a.name);
+        
+        let matches = true;
+        
+        if (filters.year && mbData.release_year !== filters.year) {
+          matches = false;
+        }
+        
+        if (filters.decade) {
+          const decadeEnd = filters.decade + 9;
+          if (!mbData.release_year || mbData.release_year < filters.decade || mbData.release_year > decadeEnd) {
+            matches = false;
+          }
+        }
+        
+        if (filters.yearStart && filters.yearEnd) {
+          if (!mbData.release_year || mbData.release_year < filters.yearStart || mbData.release_year > filters.yearEnd) {
+            matches = false;
+          }
+        }
+        
+        if (matches) {
+          const newAlbum = {
+            name: a.name,
+            artist: a.artist.name,
+            playcount: parseInt(a.playcount),
+            url: a.url,
+            image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+            release_year: mbData.release_year,
+            musicbrainz_id: mbData.musicbrainz_id,
+            type: mbData.type
+          };
+          
+          job.foundAlbums.push(newAlbum);
+          
+          console.log(`  ✓ Found #${currentCount + job.foundAlbums.length}: ${a.name} (${mbData.release_year})`);
+          
+          if (currentCount + job.foundAlbums.length >= targetLimit) {
+            console.log(`  🎯 Target reached! Found ${job.foundAlbums.length} new albums`);
+            updateJobProgress(jobId, {
+              status: 'complete',
+              progress: { current: albumIndex - startRange, total: endRange - startRange, percentage: 100 }
+            });
+            return;
+          }
+        }
+        
+        albumIndex++;
+        
+        if ((albumIndex - startRange) % 10 === 0) {
+          const current = albumIndex - startRange;
+          const total = endRange - startRange;
+          updateJobProgress(jobId, {
+            progress: { 
+              current, 
+              total, 
+              percentage: Math.round((current / total) * 100) 
+            }
+          });
+        }
+      }
+      
+      if (albumIndex >= endRange) break;
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    console.log(`  ✅ Scan complete. Found ${job.foundAlbums.length} new albums`);
+    updateJobProgress(jobId, { 
+      status: 'complete',
+      progress: { current: endRange - startRange, total: endRange - startRange, percentage: 100 }
+    });
+    
+  } catch (err) {
+    console.error(`  ❌ Scan error:`, err);
+    updateJobProgress(jobId, { 
+      status: 'error',
+      error: err.message
+    });
+  }
+}
+
 app.use(express.static('public'));
 
 app.use((req, res, next) => {
@@ -1286,6 +1511,104 @@ app.get('/api/proxy-image', async (req, res) => {
   } catch (err) {
     res.status(500).send('Proxy error');
   }
+});
+
+// ==========================================
+// 🔍 PROGRESSIVE SCAN ENDPOINTS
+// ==========================================
+
+app.get('/api/scan-stream/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  const job = scanJobs.get(jobId);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  job.clients.push(res);
+  
+  res.write(`data: ${JSON.stringify({
+    status: job.status,
+    progress: job.progress,
+    foundAlbums: job.foundAlbums,
+    newAlbumsCount: job.foundAlbums.length,
+    timeRemaining: estimateTimeRemaining(job)
+  })}\n\n`);
+  
+  req.on('close', () => {
+    job.clients = job.clients.filter(client => client !== res);
+  });
+});
+
+app.post('/api/scan-more', express.json(), async (req, res) => {
+  const { username, startRange, endRange, filters, targetLimit, currentCount } = req.body;
+  
+  if (!username || !startRange || !endRange) {
+    return res.status(400).json({ error: 'Missing required parameters' });
+  }
+  
+  for (const [existingJobId, existingJob] of scanJobs.entries()) {
+    if (existingJob.username === username && existingJob.status === 'processing') {
+      return res.status(409).json({ 
+        error: 'Scan already in progress',
+        jobId: existingJobId 
+      });
+    }
+  }
+  
+  const jobId = createScanJob(username, filters, startRange, endRange, targetLimit, currentCount);
+  
+  res.json({ 
+    success: true, 
+    jobId,
+    message: 'Scan started'
+  });
+  
+  performProgressiveScan(jobId);
+});
+
+app.post('/api/scan-stop/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  const job = scanJobs.get(jobId);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  
+  job.shouldStop = true;
+  job.status = 'stopped';
+  
+  updateJobProgress(jobId, { status: 'stopped' });
+  
+  res.json({ 
+    success: true,
+    foundAlbums: job.foundAlbums,
+    message: `Scan stopped. Found ${job.foundAlbums.length} albums.`
+  });
+});
+
+app.get('/api/scan-status/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  const job = scanJobs.get(jobId);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  
+  res.json({
+    jobId: job.jobId,
+    status: job.status,
+    progress: job.progress,
+    foundAlbums: job.foundAlbums,
+    newAlbumsCount: job.foundAlbums.length,
+    timeRemaining: estimateTimeRemaining(job),
+    error: job.error
+  });
 });
 
 app.get('/api/debug/mb-test', async (req, res) => {
