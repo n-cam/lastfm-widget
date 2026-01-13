@@ -1064,7 +1064,7 @@
     let currentView = 'card';
     let currentFilter = '';
     let currentUsername = '';
-    let currentLimit = 20;
+    let currentLimit = 50;
     let currentRange = { start: 0, end: 500 };
     let activeScanJobId = null;
     let scanEventSource = null;
@@ -1233,12 +1233,13 @@
             const response = await fetch('/api/scan-more', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                // Inside performProgressiveScan, find the fetch body:
                 body: JSON.stringify({
                     username: currentUsername,
                     startRange: 0,
                     endRange: 500,
                     filters: filters,
-                    targetLimit: currentLimit,
+                    targetLimit: parseInt(currentLimit) || 50, // Added parseInt and fallback
                     currentCount: 0
                 })
             });
@@ -1866,9 +1867,17 @@
 
     // Auto-resize for WordPress iframe
     function sendHeight() {
+    try {
         const height = document.documentElement.scrollHeight;
-        window.parent.postMessage({ type: 'resize', height: height }, '*');
+        // Only attempt to message the parent if we are actually in a frame
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'resize', height: height }, '*');
+        }
+    } catch (e) {
+        // Silently fail - cross-origin security is blocking access to parent
+        console.warn("Could not resize parent iframe due to cross-origin restrictions.");
     }
+}
 
     window.addEventListener('load', sendHeight);
     window.addEventListener('resize', sendHeight);
