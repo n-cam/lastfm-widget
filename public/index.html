@@ -224,6 +224,7 @@
         .loading {
             text-align: center;
             padding: 40px;
+            display: none;
         }
 
         .loading-spinner {
@@ -239,6 +240,139 @@
 
         @keyframes spin {
             to { transform: rotate(360deg); }
+        }
+
+        /* Initial Scan Progress */
+        .initial-scan-progress {
+            background: white;
+            border: 3px solid var(--primary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 5px 5px 0 var(--primary);
+        }
+
+        .initial-scan-header {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .initial-scan-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .initial-scan-stat {
+            background: rgba(240, 144, 181, 0.2);
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .initial-scan-stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }
+
+        .initial-scan-stat-label {
+            font-size: 10px;
+            opacity: 0.7;
+            text-transform: uppercase;
+        }
+
+        .initial-scan-progress-bar {
+            background: var(--base);
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            height: 32px;
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 12px;
+        }
+
+        .initial-scan-progress-fill {
+            background: var(--contrast);
+            height: 100%;
+            transition: width 0.3s ease;
+            border-right: 2px solid var(--primary);
+        }
+
+        .initial-scan-progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-weight: 700;
+            font-size: 11px;
+            color: var(--primary);
+        }
+
+        .initial-scan-message {
+            text-align: center;
+            font-size: 11px;
+            color: var(--primary);
+            opacity: 0.7;
+        }
+
+        /* Stop Early Button */
+        .stop-early-section {
+            background: rgba(196, 224, 224, 0.3);
+            border: 2px solid var(--primary);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+            text-align: center;
+        }
+
+        .stop-early-section p {
+            font-size: 12px;
+            color: var(--primary);
+            margin-bottom: 12px;
+        }
+
+        .stop-early-btn {
+            padding: 8px 16px;
+            background: var(--primary);
+            color: white;
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            font-family: 'Martian Mono', monospace;
+            font-weight: 600;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 2px 2px 0 var(--primary);
+        }
+
+        .stop-early-btn:hover {
+            transform: translate(1px, 1px);
+            box-shadow: 1px 1px 0 var(--primary);
+        }
+
+        /* Album card fade-in animation */
+        @keyframes albumFadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .album-card.new {
+            animation: albumFadeIn 0.4s ease-out;
         }
 
         .error {
@@ -791,6 +925,34 @@
             </div>
         </div>
 
+        <div id="initialScanProgress" class="section initial-scan-progress" style="display: none;">
+            <div class="initial-scan-header">
+                <span>🔍</span>
+                <span id="initialScanTitle">Scanning your library...</span>
+            </div>
+            <div class="initial-scan-stats">
+                <div class="initial-scan-stat">
+                    <div class="initial-scan-stat-value" id="initialScanned">0</div>
+                    <div class="initial-scan-stat-label">Scanned</div>
+                </div>
+                <div class="initial-scan-stat">
+                    <div class="initial-scan-stat-value" id="initialFound">0</div>
+                    <div class="initial-scan-stat-label">Found</div>
+                </div>
+                <div class="initial-scan-stat">
+                    <div class="initial-scan-stat-value" id="initialProgress">0%</div>
+                    <div class="initial-scan-stat-label">Progress</div>
+                </div>
+            </div>
+            <div class="initial-scan-progress-bar">
+                <div class="initial-scan-progress-fill" id="initialProgressFill" style="width: 0%"></div>
+                <div class="initial-scan-progress-text" id="initialProgressText">Starting...</div>
+            </div>
+            <div class="initial-scan-message" id="initialScanMessage">
+                Fetching albums from Last.fm...
+            </div>
+        </div>
+
         <div id="loading" class="section" style="display: none;">
             <div class="loading">
                 <div class="loading-spinner"></div>
@@ -821,6 +983,11 @@
                 </div>
 
                 <div id="albumsGrid" class="albums-grid"></div>
+
+                <div id="stopEarlySection" class="stop-early-section" style="display: none;">
+                    <p><strong>Found what you need?</strong><br>You can stop scanning and use the <span id="stopEarlyCount">0</span> albums found so far.</p>
+                    <button class="btn stop-early-btn" id="stopEarlyBtn">✋ Stop Scan & Use These Results</button>
+                </div>
 
                 <div id="insufficientResults" class="insufficient-results-card" style="display: none;">
                     <h3>⚠️ Not enough albums found</h3>
@@ -901,6 +1068,8 @@
     let currentRange = { start: 0, end: 500 };
     let activeScanJobId = null;
     let scanEventSource = null;
+    let isInitialScanActive = false;
+    let initialScanAbortController = null;
 
     // Filter tabs
     document.querySelectorAll('.tab').forEach(tab => {
@@ -969,21 +1138,101 @@
         currentRange = { start: 0, end: 500 };
 
         hideAll();
-        document.getElementById('loading').style.display = 'block';
-        document.getElementById('submitBtn').disabled = true;
         
-        if (activeFilter !== 'all') {
-            document.getElementById('loadingMessage').textContent = 'scanning your top 500 albums...';
-            document.getElementById('loadingDetail').textContent = 'checking release years to find matches (~3-8 minutes)';
+        // For real-time users with filters, show progressive scan
+        const hasFilter = activeFilter !== 'all';
+        
+        if (hasFilter) {
+            await performProgressiveScan();
         } else {
-            document.getElementById('loadingMessage').textContent = 'fetching your albums...';
-            document.getElementById('loadingDetail').textContent = 'this will take 1-2 minutes';
+            // Standard loading for "all time" or cached users
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('submitBtn').disabled = true;
+            
+            try {
+                await fetchStats(currentUsername);
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
+                }
+
+                const data = await response.json();
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('submitBtn').disabled = false;
+
+                let albums = data.albums;
+                if (activeFilter === 'range') {
+                    const yearStart = parseInt(document.getElementById('yearStart').value);
+                    const yearEnd = parseInt(document.getElementById('yearEnd').value);
+                    albums = albums.filter(a => 
+                        a.release_year && 
+                        a.release_year >= yearStart && 
+                        a.release_year <= yearEnd
+                    );
+                }
+
+                if (albums && albums.length > 0) {
+                    currentAlbums = albums;
+                    displayResults(currentUsername, filterText, albums.length);
+                    sortAndDisplayAlbums();
+                } else {
+                    document.getElementById('noResults').style.display = 'block';
+                }
+
+            } catch (err) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('submitBtn').disabled = false;
+                showError(err.message);
+            }
         }
+    });
 
+    async function performProgressiveScan() {
+        isInitialScanActive = true;
+        currentAlbums = [];
+        
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('initialScanProgress').style.display = 'block';
+        document.getElementById('results').style.display = 'block';
+        displayResults(currentUsername, currentFilter, 0);
+        
+        const activeFilter = document.querySelector('.tab.active').dataset.filter;
+        
+        let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
+        
+        if (activeFilter === 'year') {
+            const year = document.getElementById('year').value;
+            if (year) url += `&year=${year}`;
+        } else if (activeFilter === 'decade') {
+            const decade = document.getElementById('decade').value;
+            if (decade) url += `&decade=${decade}`;
+        } else if (activeFilter === 'range') {
+            const yearStart = document.getElementById('yearStart').value;
+            const yearEnd = document.getElementById('yearEnd').value;
+            if (yearStart && yearEnd) url += `&yearStart=${yearStart}&yearEnd=${yearEnd}`;
+        }
+        
+        initialScanAbortController = new AbortController();
+        
+        // Simulate progress while backend processes
+        const progressInterval = setInterval(() => {
+            const current = parseInt(document.getElementById('initialScanned').textContent) || 0;
+            if (current < 450) {
+                updateInitialScanProgress({
+                    scanned: current + 10,
+                    total: 500,
+                    found: currentAlbums.length,
+                    message: 'Scanning your library...'
+                });
+            }
+        }, 500);
+        
         try {
-            await fetchStats(currentUsername);
-
-            const response = await fetch(url);
+            const response = await fetch(url, { signal: initialScanAbortController.signal });
+            
+            clearInterval(progressInterval);
             
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
@@ -991,38 +1240,122 @@
             }
 
             const data = await response.json();
-
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('submitBtn').disabled = false;
-
-            let albums = data.albums;
-            if (activeFilter === 'range') {
-                const yearStart = parseInt(document.getElementById('yearStart').value);
-                const yearEnd = parseInt(document.getElementById('yearEnd').value);
-                albums = albums.filter(a => 
-                    a.release_year && 
-                    a.release_year >= yearStart && 
-                    a.release_year <= yearEnd
-                );
+            
+            updateInitialScanProgress({
+                scanned: 500,
+                total: 500,
+                found: data.albums.length,
+                message: 'Complete!'
+            });
+            
+            // Show albums with animation
+            if (data.albums && data.albums.length > 0) {
+                for (const album of data.albums) {
+                    currentAlbums.push(album);
+                    addAlbumToGrid(album, currentAlbums.length - 1);
+                    await new Promise(r => setTimeout(r, 50)); // Stagger animations
+                }
             }
-
-            if (albums && albums.length > 0) {
-                currentAlbums = albums;
-                displayResults(currentUsername, filterText, albums.length);
-                sortAndDisplayAlbums();
+            
+            setTimeout(() => {
+                document.getElementById('initialScanProgress').style.display = 'none';
+                document.getElementById('stopEarlySection').style.display = 'none';
+                document.getElementById('submitBtn').disabled = false;
+                isInitialScanActive = false;
                 
-                // Check if we need more scanning
-                if (currentAlbums.length < currentLimit && currentRange.end === 500) {
+                displayResults(currentUsername, currentFilter, currentAlbums.length);
+                
+                if (currentAlbums.length < currentLimit) {
                     showInsufficientResults();
                 }
-            } else {
-                document.getElementById('noResults').style.display = 'block';
-            }
-
+            }, 1000);
+            
         } catch (err) {
-            document.getElementById('loading').style.display = 'none';
+            clearInterval(progressInterval);
+            document.getElementById('initialScanProgress').style.display = 'none';
+            document.getElementById('stopEarlySection').style.display = 'none';
             document.getElementById('submitBtn').disabled = false;
-            showError(err.message);
+            isInitialScanActive = false;
+            
+            if (err.name === 'AbortError') {
+                showError('Scan cancelled');
+            } else {
+                showError(err.message);
+            }
+        }
+    }
+
+    function updateInitialScanProgress({ scanned, total, found, message }) {
+        const percentage = Math.round((scanned / total) * 100);
+        
+        document.getElementById('initialScanned').textContent = scanned;
+        document.getElementById('initialFound').textContent = found;
+        document.getElementById('initialProgress').textContent = `${percentage}%`;
+        document.getElementById('initialProgressFill').style.width = `${percentage}%`;
+        document.getElementById('initialProgressText').textContent = `${scanned} / ${total}`;
+        document.getElementById('initialScanMessage').textContent = message;
+    }
+
+    function addAlbumToGrid(album, index) {
+        const grid = document.getElementById('albumsGrid');
+        const card = document.createElement('div');
+        card.className = 'album-card new';
+        
+        const displayName = album.name || 'Unknown Album';
+        const displayArtist = album.artist || 'Unknown Artist';
+        const displayUrl = album.url || '#';
+
+        card.onclick = () => {
+            if (displayUrl !== '#') window.open(displayUrl, '_blank');
+        };
+
+        const rawUrl = album.image;
+        const imageUrl = rawUrl && rawUrl.length > 5
+            ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
+            : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+
+        card.innerHTML = `
+            <img 
+                src="${imageUrl}" 
+                alt="${displayName}"
+                class="album-cover"
+                crossorigin="anonymous" 
+                onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+            >
+            <div class="album-info">
+                <div class="album-name" title="${displayName}">${displayName}</div>
+                <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
+                <div class="album-meta">
+                    <span class="album-rank">#${index + 1}</span>
+                    <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
+                    <span class="album-year">${album.release_year || '?'}</span>
+                </div>
+            </div>
+        `;
+        grid.appendChild(card);
+        
+        // Remove 'new' class after animation
+        setTimeout(() => card.classList.remove('new'), 400);
+    }
+
+    // Mock getMusicBrainzData for client-side (in real app, this would be a backend call)
+    async function getMusicBrainzData(artist, album) {
+        // This is a placeholder - in production, this should call your backend
+        // For now, return dummy data
+        return {
+            release_year: 2000 + Math.floor(Math.random() * 25),
+            musicbrainz_id: null,
+            type: 'Album'
+        };
+    }
+
+    document.getElementById('stopEarlyBtn').addEventListener('click', () => {
+        if (isInitialScanActive && initialScanAbortController) {
+            initialScanAbortController.abort();
+            document.getElementById('initialScanProgress').style.display = 'none';
+            document.getElementById('stopEarlySection').style.display = 'none';
+            document.getElementById('submitBtn').disabled = false;
+            isInitialScanActive = false;
         }
     });
 
