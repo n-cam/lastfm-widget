@@ -960,7 +960,8 @@ async function performProgressiveScan(jobId) {
     for (let page = startPage; page <= endPage; page++) {
       if (job.shouldStop) {
         console.log(`  ⏸️  Scan stopped by user at album ${albumIndex}`);
-        break;
+        updateJobProgress(jobId, { status: 'stopped' });
+        return;
       }
       
       const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
@@ -992,7 +993,11 @@ async function performProgressiveScan(jobId) {
         : [pageData.topalbums.album];
       
       for (const a of albums) {
-        if (job.shouldStop) break;
+        if (job.shouldStop) {
+          updateJobProgress(jobId, { status: 'stopped' });
+          return;
+        }
+        
         if (albumIndex < startRange) {
           albumIndex++;
           continue;
@@ -1048,7 +1053,8 @@ async function performProgressiveScan(jobId) {
         
         albumIndex++;
         
-        if ((albumIndex - startRange) % 10 === 0) {
+        // UPDATE PROGRESS MORE FREQUENTLY
+        if ((albumIndex - startRange) % 5 === 0) {  // Changed from 10 to 5
           const current = albumIndex - startRange;
           const total = endRange - startRange;
           updateJobProgress(jobId, {
@@ -1511,6 +1517,37 @@ app.get('/api/proxy-image', async (req, res) => {
   } catch (err) {
     res.status(500).send('Proxy error');
   }
+});
+
+// ==========================================
+// 🔍 UNIFIED SCAN START (for initial scans)
+// ==========================================
+
+app.post('/api/scan-start', express.json(), async (req, res) => {
+  const { username, startRange = 1, endRange = 500, filters = {}, targetLimit } = req.body;
+  
+  if (!username) {
+    return res.status(400).json({ error: 'Missing username' });
+  }
+  
+  for (const [existingJobId, existingJob] of scanJobs.entries()) {
+    if (existingJob.username === username && existingJob.status === 'processing') {
+      return res.status(409).json({ 
+        error: 'Scan already in progress',
+        jobId: existingJobId 
+      });
+    }
+  }
+  
+  const jobId = createScanJob(username, filters, startRange, endRange, targetLimit || 50, 0);
+  
+  res.json({ 
+    success: true, 
+    jobId,
+    message: 'Scan started'
+  });
+  
+  performProgressiveScan(jobId);
 });
 
 // ==========================================

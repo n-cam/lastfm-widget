@@ -1065,7 +1065,7 @@
     let currentFilter = '';
     let currentUsername = '';
     let currentLimit = 50;
-    let currentRange = { start: 0, end: 500 };
+    let currentRange = { start: 1, end: 500 };
     let activeScanJobId = null;
     let scanEventSource = null;
     let isInitialScanActive = false;
@@ -1103,197 +1103,213 @@
     });
 
     // Form submit
-    document.getElementById('searchForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
+document.getElementById('searchForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
 
-        currentUsername = document.getElementById('username').value.trim();
-        const activeFilter = document.querySelector('.tab.active').dataset.filter;
-        currentLimit = parseInt(document.getElementById('limit').value);
+    // Prevent duplicate scans
+    if (isInitialScanActive) {
+        console.log('Scan already in progress');
+        return;
+    }
 
-        let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
-        let filterText = 'all time';
+    const username = document.getElementById('username').value.trim();
+    currentUsername = username; // Store username
+    const activeFilter = document.querySelector('.tab.active').dataset.filter;
+    currentLimit = parseInt(document.getElementById('limit').value);
 
-        if (activeFilter === 'year') {
-            const year = document.getElementById('year').value;
-            if (year) {
-                url += `&year=${year}`;
-                filterText = year;
-            }
-        } else if (activeFilter === 'decade') {
-            const decade = document.getElementById('decade').value;
-            if (decade) {
-                url += `&decade=${decade}`;
-                filterText = `${decade}s`;
-            }
-        } else if (activeFilter === 'range') {
-            const yearStart = document.getElementById('yearStart').value;
-            const yearEnd = document.getElementById('yearEnd').value;
-            if (yearStart && yearEnd) {
-                url += `&yearStart=${yearStart}&yearEnd=${yearEnd}`;
-                filterText = `${yearStart}–${yearEnd}`;
-            }
-        }
+    let filterText = 'all time';
 
-        currentFilter = filterText;
-        currentRange = { start: 0, end: 500 };
-        
-        // Clear previous results
-        currentAlbums = [];
+    if (activeFilter === 'year') {
+        const year = document.getElementById('year').value;
+        if (year) filterText = year;
+    } else if (activeFilter === 'decade') {
+        const decade = document.getElementById('decade').value;
+        if (decade) filterText = `${decade}s`;
+    } else if (activeFilter === 'range') {
+        const yearStart = document.getElementById('yearStart').value;
+        const yearEnd = document.getElementById('yearEnd').value;
+        if (yearStart && yearEnd) filterText = `${yearStart}–${yearEnd}`;
+    }
 
-        hideAll();
-        
-        // For real-time users with filters, show progressive scan
-        const hasFilter = activeFilter !== 'all';
-        
-        if (hasFilter) {
-            await performProgressiveScan();
-        } else {
-            // Standard loading for "all time" or cached users
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('submitBtn').disabled = true;
-            
-            try {
-                await fetchStats(currentUsername);
-                const response = await fetch(url);
-                
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
-                }
+    currentFilter = filterText;
+    currentAlbums = []; // Clear previous results
 
-                const data = await response.json();
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('submitBtn').disabled = false;
-
-                let albums = data.albums;
-                if (activeFilter === 'range') {
-                    const yearStart = parseInt(document.getElementById('yearStart').value);
-                    const yearEnd = parseInt(document.getElementById('yearEnd').value);
-                    albums = albums.filter(a => 
-                        a.release_year && 
-                        a.release_year >= yearStart && 
-                        a.release_year <= yearEnd
-                    );
-                }
-
-                if (albums && albums.length > 0) {
-                    currentAlbums = albums;
-                    displayResults(currentUsername, filterText, albums.length);
-                    sortAndDisplayAlbums();
-                } else {
-                    document.getElementById('noResults').style.display = 'block';
-                }
-
-            } catch (err) {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('submitBtn').disabled = false;
-                showError(err.message);
-            }
-        }
-    });
-
-    async function performProgressiveScan() {
-        isInitialScanActive = true;
-        // currentAlbums already cleared in submit handler
-        
+    hideAll();
+    
+    // For filtered queries, use progressive scan
+    const hasFilter = activeFilter !== 'all';
+    
+    if (hasFilter) {
+        await startProgressiveScan();
+    } else {
+        // Standard loading for "all time"
+        document.getElementById('loading').style.display = 'block';
         document.getElementById('submitBtn').disabled = true;
-        document.getElementById('initialScanProgress').style.display = 'block';
-        document.getElementById('results').style.display = 'block';
-        displayResults(currentUsername, currentFilter, 0);
         
-        // Prepare filters for the job
-        const activeFilter = document.querySelector('.tab.active').dataset.filter;
-        let filters = {};
+        // Build URL with filters
+        let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
         
-        if (activeFilter === 'year') {
-            const year = document.getElementById('year').value;
-            if (year) filters.year = parseInt(year);
-        } else if (activeFilter === 'decade') {
-            const decade = document.getElementById('decade').value;
-            if (decade) filters.decade = parseInt(decade);
-        } else if (activeFilter === 'range') {
-            const yearStart = document.getElementById('yearStart').value;
-            const yearEnd = document.getElementById('yearEnd').value;
-            if (yearStart && yearEnd) {
-                filters.yearStart = parseInt(yearStart);
-                filters.yearEnd = parseInt(yearEnd);
-            }
-        }
-
-        // Reset UI
-        updateInitialScanProgress({
-            scanned: 0,
-            total: 500,
-            found: 0,
-            message: 'Initializing scan...'
-        });
-
         try {
-            // 1. Start the Job
-            const response = await fetch('/api/scan-more', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                // Inside performProgressiveScan, find the fetch body:
-                body: JSON.stringify({
-                    username: currentUsername,
-                    startRange: 0,
-                    endRange: 500,
-                    filters: filters,
-                    targetLimit: parseInt(currentLimit) || 50, // Added parseInt and fallback
-                    currentCount: 0
-                })
-            });
+            await fetchStats(username);
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch albums`);
+            }
 
-            if (!response.ok) throw new Error('Failed to start scan');
             const data = await response.json();
-            activeScanJobId = data.jobId;
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('submitBtn').disabled = false;
 
-            // 2. Connect to the stream
-            scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
-
-            scanEventSource.onmessage = (event) => {
-                const jobData = JSON.parse(event.data);
-                
-                // Update Progress UI
-                updateInitialScanProgress({
-                    scanned: jobData.progress.current,
-                    total: 500,
-                    found: jobData.foundAlbums.length,
-                    message: jobData.timeRemaining ? `Estimated time: ${jobData.timeRemaining}` : 'Scanning...'
-                });
-
-                // Live Update of Grid
-                if (jobData.foundAlbums && jobData.foundAlbums.length > currentAlbums.length) {
-                    const newAlbums = jobData.foundAlbums.slice(currentAlbums.length);
-                    for (const album of newAlbums) {
-                        currentAlbums.push(album);
-                        addAlbumToGrid(album, currentAlbums.length - 1);
-                    }
-                    // Update header count
-                    displayResults(currentUsername, currentFilter, currentAlbums.length);
-                }
-
-                // Handle Completion
-                if (jobData.status === 'complete' || jobData.status === 'stopped' || jobData.status === 'error') {
-                    scanEventSource.close();
-                    scanEventSource = null;
-                    finishInitialScan(jobData.status === 'error' ? jobData.error : null);
-                }
-            };
-
-            scanEventSource.onerror = () => {
-                if (scanEventSource) scanEventSource.close();
-                finishInitialScan('Connection lost');
-            };
+            if (data.albums && data.albums.length > 0) {
+                currentAlbums = data.albums;
+                displayResults(username, filterText, data.albums.length);
+                sortAndDisplayAlbums();
+            } else {
+                document.getElementById('noResults').style.display = 'block';
+            }
 
         } catch (err) {
-            finishInitialScan(err.message);
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('submitBtn').disabled = false;
+            showError(err.message);
         }
     }
+});
+
+    async function startProgressiveScan() {
+    // Close any existing connections first
+    if (scanEventSource) {
+        scanEventSource.close();
+        scanEventSource = null;
+    }
+    
+    if (activeScanJobId) {
+        console.log('Scan already in progress');
+        return;
+    }
+    
+    isInitialScanActive = true;
+    currentAlbums = [];
+    
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('initialScanProgress').style.display = 'block';
+    document.getElementById('results').style.display = 'block';
+    displayResults(currentUsername, currentFilter, 0);
+    
+    // Prepare filters
+    const activeFilter = document.querySelector('.tab.active').dataset.filter;
+    let filters = {};
+    
+    if (activeFilter === 'year') {
+        const year = document.getElementById('year').value;
+        if (year) filters.year = parseInt(year);
+    } else if (activeFilter === 'decade') {
+        const decade = document.getElementById('decade').value;
+        if (decade) filters.decade = parseInt(decade);
+    } else if (activeFilter === 'range') {
+        const yearStart = document.getElementById('yearStart').value;
+        const yearEnd = document.getElementById('yearEnd').value;
+        if (yearStart && yearEnd) {
+            filters.yearStart = parseInt(yearStart);
+            filters.yearEnd = parseInt(yearEnd);
+        }
+    }
+
+    // Reset UI
+    updateInitialScanProgress({
+        scanned: 0,
+        total: 500,
+        found: 0,
+        message: 'Initializing scan...'
+    });
+
+    try {
+        // Start the job
+        const response = await fetch('/api/scan-more', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: currentUsername,
+                startRange: 1,
+                endRange: 500,
+                filters: filters,
+                targetLimit: parseInt(currentLimit),
+                currentCount: 0
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to start scan');
+        const data = await response.json();
+        activeScanJobId = data.jobId;
+
+        // Connect to stream
+        connectToInitialScanStream();
+
+    } catch (err) {
+        finishInitialScan(err.message);
+    }
+}
+
+function connectToInitialScanStream() {
+    if (scanEventSource) {
+        scanEventSource.close();
+    }
+
+    scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
+
+    scanEventSource.onmessage = (event) => {
+        const jobData = JSON.parse(event.data);
+        
+        // Update Progress UI
+        updateInitialScanProgress({
+            scanned: jobData.progress.current,
+            total: jobData.progress.total,
+            found: jobData.foundAlbums.length,
+            message: jobData.timeRemaining ? `Estimated time: ${jobData.timeRemaining}` : 'Scanning...'
+        });
+
+        // Live Update of Grid
+        if (jobData.foundAlbums && jobData.foundAlbums.length > currentAlbums.length) {
+            const newAlbums = jobData.foundAlbums.slice(currentAlbums.length);
+            for (const album of newAlbums) {
+                currentAlbums.push(album);
+                addAlbumToGrid(album, currentAlbums.length - 1);
+            }
+            displayResults(currentUsername, currentFilter, currentAlbums.length);
+        }
+
+        // Show stop button during scan (MOVED INSIDE onmessage handler)
+        if (jobData.foundAlbums && jobData.foundAlbums.length > 0 && jobData.status === 'processing') {
+            document.getElementById('stopEarlySection').style.display = 'block';
+            document.getElementById('stopEarlyCount').textContent = currentAlbums.length;
+        }
+
+        // Handle Completion
+        if (jobData.status === 'complete' || jobData.status === 'stopped' || jobData.status === 'error') {
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+            }
+            finishInitialScan(jobData.status === 'error' ? jobData.error : null);
+        }
+    };
+
+    scanEventSource.onerror = (err) => {
+        console.error('Stream error:', err);
+        if (scanEventSource) {
+            scanEventSource.close();
+            scanEventSource = null;
+        }
+        finishInitialScan('Connection lost');
+    };
+}
 
     function finishInitialScan(error) {
         document.getElementById('initialScanProgress').style.display = 'none';
         document.getElementById('submitBtn').disabled = false;
+        document.getElementById('stopEarlySection').style.display = 'none';
         isInitialScanActive = false;
         activeScanJobId = null;
 
@@ -1374,19 +1390,21 @@
     }
 
    document.getElementById('stopEarlyBtn').addEventListener('click', async () => {
-        if (isInitialScanActive && activeScanJobId) {
-            try {
-                // Tell server to stop the job
-                await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
-            } catch (e) { console.error(e); }
-
-            if (scanEventSource) {
-                scanEventSource.close();
-                scanEventSource = null;
-            }
-            finishInitialScan();
+    if (isInitialScanActive && activeScanJobId) {
+        try {
+            await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
+        } catch (e) { 
+            console.error(e); 
         }
-    });
+
+        if (scanEventSource) {
+            scanEventSource.close();
+            scanEventSource = null;
+        }
+        
+        finishInitialScan(null);
+    }
+});
 
     async function fetchStats(username) {
         try {
@@ -1675,6 +1693,9 @@
         
         // Update results subtitle
         displayResults(currentUsername, currentFilter, currentAlbums.length);
+        
+        // Re-enable submit button
+        document.getElementById('submitBtn').disabled = false;
         
         // Check if we still need more
         if (currentAlbums.length < currentLimit && currentRange.end < 2000) {
