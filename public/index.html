@@ -1179,13 +1179,25 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
 });
 
     async function startProgressiveScan() {
-    // Close any existing connections first
+    // ✅ IMPORTANT: Close EventSource and clear job BEFORE checking if scan is active
     if (scanEventSource) {
         scanEventSource.close();
         scanEventSource = null;
     }
     
+    // Clear any lingering job ID
     if (activeScanJobId) {
+        // Try to stop the old job on the server
+        try {
+            await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to stop old job:', e);
+        }
+        activeScanJobId = null;
+    }
+    
+    // Prevent multiple scans from running
+    if (isInitialScanActive) {
         console.log('Scan already in progress');
         return;
     }
@@ -1196,6 +1208,19 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
     document.getElementById('submitBtn').disabled = true;
     document.getElementById('initialScanProgress').style.display = 'block';
     document.getElementById('results').style.display = 'block';
+    
+    // Clear the grid before starting new scan
+    document.getElementById('albumsGrid').innerHTML = '';
+    
+    // Reset all progress UI elements
+    document.getElementById('initialScanned').textContent = '0';
+    document.getElementById('initialFound').textContent = '0';
+    document.getElementById('initialProgress').textContent = '0%';
+    document.getElementById('initialProgressFill').style.width = '0%';
+    document.getElementById('initialProgressText').textContent = 'Starting...';
+    document.getElementById('initialScanMessage').textContent = 'Initializing scan...';
+    document.getElementById('stopEarlySection').style.display = 'none';
+    
     displayResults(currentUsername, currentFilter, 0);
     
     // Prepare filters
