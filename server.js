@@ -1004,6 +1004,17 @@ async function performProgressiveScan(jobId) {
         }
         if (albumIndex >= endRange) break;
         
+        // ✅ UPDATE PROGRESS BEFORE MUSICBRAINZ LOOKUP (this is the slow part!)
+        const current = albumIndex - startRange + 1;
+        const total = endRange - startRange;
+        updateJobProgress(jobId, {
+          progress: { 
+            current, 
+            total, 
+            percentage: Math.round((current / total) * 100) 
+          }
+        });
+        
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let matches = true;
@@ -1045,26 +1056,13 @@ async function performProgressiveScan(jobId) {
             console.log(`  🎯 Target reached! Found ${job.foundAlbums.length} new albums`);
             updateJobProgress(jobId, {
               status: 'complete',
-              progress: { current: albumIndex - startRange, total: endRange - startRange, percentage: 100 }
+              progress: { current: total, total: total, percentage: 100 }
             });
             return;
           }
         }
         
         albumIndex++;
-        
-        // UPDATE PROGRESS MORE FREQUENTLY
-        if ((albumIndex - startRange) % 5 === 0) {  // Changed from 10 to 5
-          const current = albumIndex - startRange;
-          const total = endRange - startRange;
-          updateJobProgress(jobId, {
-            progress: { 
-              current, 
-              total, 
-              percentage: Math.round((current / total) * 100) 
-            }
-          });
-        }
       }
       
       if (albumIndex >= endRange) break;
