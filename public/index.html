@@ -1190,6 +1190,8 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
         // Try to stop the old job on the server
         try {
             await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
+            // ✅ Wait a moment for the job to fully stop
+            await new Promise(resolve => setTimeout(resolve, 500));
         } catch (e) {
             console.error('Failed to stop old job:', e);
         }
@@ -1649,26 +1651,68 @@ function connectToInitialScanStream() {
         document.getElementById('scanETA').textContent = 'Estimating time...';
     }
 
-    function connectToScanStream() {
-        scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
+    function connectToInitialScanStream() {
+    if (scanEventSource) {
+        scanEventSource.close();
+    }
+
+    // Store the current job ID to validate messages
+    const currentJobId = activeScanJobId;
+
+    scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
+
+    scanEventSource.onmessage = (event) => {
+        const jobData = JSON.parse(event.data);
         
-        scanEventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            updateScanProgress(data);
-            
-            if (data.status === 'complete' || data.status === 'stopped' || data.status === 'error') {
+        // ✅ CRITICAL: Ignore messages from old jobs
+        if (activeScanJobId !== currentJobId) {
+            console.log('Ignoring message from old job');
+            return;
+        }
+        
+        // Update Progress UI
+        updateInitialScanProgress({
+            scanned: jobData.progress.current,
+            total: jobData.progress.total,
+            found: jobData.foundAlbums.length,
+            message: jobData.timeRemaining ? `Estimated time: ${jobData.timeRemaining}` : 'Scanning...'
+        });
+
+        // Live Update of Grid
+        if (jobData.foundAlbums && jobData.foundAlbums.length > currentAlbums.length) {
+            const newAlbums = jobData.foundAlbums.slice(currentAlbums.length);
+            for (const album of newAlbums) {
+                currentAlbums.push(album);
+                addAlbumToGrid(album, currentAlbums.length - 1);
+            }
+            displayResults(currentUsername, currentFilter, currentAlbums.length);
+        }
+
+        // Show stop button during scan
+        if (jobData.foundAlbums && jobData.foundAlbums.length > 0 && jobData.status === 'processing') {
+            document.getElementById('stopEarlySection').style.display = 'block';
+            document.getElementById('stopEarlyCount').textContent = currentAlbums.length;
+        }
+
+        // Handle Completion
+        if (jobData.status === 'complete' || jobData.status === 'stopped' || jobData.status === 'error') {
+            if (scanEventSource) {
                 scanEventSource.close();
                 scanEventSource = null;
-                handleScanComplete(data);
             }
-        };
-        
-        scanEventSource.onerror = () => {
-            console.error('SSE connection error');
+            finishInitialScan(jobData.status === 'error' ? jobData.error : null);
+        }
+    };
+
+    scanEventSource.onerror = (err) => {
+        console.error('Stream error:', err);
+        if (scanEventSource) {
             scanEventSource.close();
             scanEventSource = null;
-        };
-    }
+        }
+        finishInitialScan('Connection lost');
+    };
+}
 
     function updateScanProgress(data) {
         const percentage = data.progress.percentage || 0;
