@@ -956,6 +956,7 @@ async function performProgressiveScan(jobId) {
     const endPage = Math.ceil(endRange / perPage);
     
     let albumIndex = startRange;
+    let processedCount = 0; // ✅ Track actual MusicBrainz lookups completed
     
     for (let page = startPage; page <= endPage; page++) {
       if (job.shouldStop) {
@@ -1004,18 +1005,19 @@ async function performProgressiveScan(jobId) {
         }
         if (albumIndex >= endRange) break;
         
-        // ✅ UPDATE PROGRESS BEFORE MUSICBRAINZ LOOKUP (this is the slow part!)
-        const current = albumIndex - startRange + 1;
+        // ✅ DO THE MUSICBRAINZ LOOKUP FIRST
+        const mbData = await getMusicBrainzData(a.artist.name, a.name);
+        
+        // ✅ NOW UPDATE PROGRESS (after the slow part is done)
+        processedCount++;
         const total = endRange - startRange;
         updateJobProgress(jobId, {
           progress: { 
-            current, 
+            current: processedCount, 
             total, 
-            percentage: Math.round((current / total) * 100) 
+            percentage: Math.round((processedCount / total) * 100) 
           }
         });
-        
-        const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
         let matches = true;
         
