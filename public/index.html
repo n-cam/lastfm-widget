@@ -1179,42 +1179,53 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
 });
 
     async function startProgressiveScan() {
-    // ✅ IMPORTANT: Close EventSource and clear job BEFORE checking if scan is active
+    // CRITICAL: Create a generation counter to invalidate old messages
+    if (typeof window.scanGeneration === 'undefined') {
+        window.scanGeneration = 0;
+    }
+    window.scanGeneration++;
+    const thisGeneration = window.scanGeneration;
+    
+    console.log(`🆕 Starting new scan (Generation ${thisGeneration})`);
+    
+    // Close old EventSource FIRST
     if (scanEventSource) {
+        console.log('Closing old EventSource');
         scanEventSource.close();
         scanEventSource = null;
     }
     
-    // Clear any lingering job ID
+    // Stop old job on server if exists
     if (activeScanJobId) {
-        // Try to stop the old job on the server
         try {
+            console.log(`Stopping old job: ${activeScanJobId}`);
             await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
-            // ✅ Wait a moment for the job to fully stop
-            await new Promise(resolve => setTimeout(resolve, 500));
         } catch (e) {
             console.error('Failed to stop old job:', e);
         }
         activeScanJobId = null;
     }
     
-    // Prevent multiple scans from running
+    // CRITICAL: Wait for old connections to fully close
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Prevent multiple scans
     if (isInitialScanActive) {
         console.log('Scan already in progress');
         return;
     }
     
     isInitialScanActive = true;
+    
+    // Clear state AFTER stopping old job
     currentAlbums = [];
+    document.getElementById('albumsGrid').innerHTML = '';
     
     document.getElementById('submitBtn').disabled = true;
     document.getElementById('initialScanProgress').style.display = 'block';
     document.getElementById('results').style.display = 'block';
     
-    // Clear the grid before starting new scan
-    document.getElementById('albumsGrid').innerHTML = '';
-    
-    // Reset all progress UI elements
+    // Reset progress UI
     document.getElementById('initialScanned').textContent = '0';
     document.getElementById('initialFound').textContent = '0';
     document.getElementById('initialProgress').textContent = '0%';
@@ -1244,14 +1255,6 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
         }
     }
 
-    // Reset UI
-    updateInitialScanProgress({
-        scanned: 0,
-        total: 500,
-        found: 0,
-        message: 'Initializing scan...'
-    });
-
     try {
         // Start the job
         const response = await fetch('/api/scan-more', {
@@ -1271,23 +1274,49 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
         const data = await response.json();
         activeScanJobId = data.jobId;
 
-        // Connect to stream
-        connectToInitialScanStream();
+        // Connect to stream with generation validation
+        connectToInitialScanStream(thisGeneration);
 
     } catch (err) {
         finishInitialScan(err.message);
     }
 }
 
-function connectToInitialScanStream() {
+
+function connectToInitialScanStream(expectedGeneration) {
     if (scanEventSource) {
         scanEventSource.close();
     }
 
+    console.log(`📡 Connecting to stream for Generation ${expectedGeneration}`);
     scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
 
     scanEventSource.onmessage = (event) => {
+        // TRIPLE VALIDATION to prevent stale messages
+        
+        // Validation 1: Check generation counter
+        if (window.scanGeneration !== expectedGeneration) {
+            console.log(`❌ Ignoring message from old generation (expected: ${expectedGeneration}, current: ${window.scanGeneration})`);
+            return;
+        }
+        
+        // Validation 2: Check if scan is still active
+        if (!isInitialScanActive) {
+            console.log('❌ Ignoring message - scan no longer active');
+            return;
+        }
+        
+        // Validation 3: Verify job ID hasn't changed
+        const currentJobId = activeScanJobId;
+        
         const jobData = JSON.parse(event.data);
+        
+        if (activeScanJobId !== currentJobId) {
+            console.log('❌ Ignoring message - job ID changed');
+            return;
+        }
+        
+        // ALL VALIDATIONS PASSED - process the message
         
         // Update Progress UI
         updateInitialScanProgress({
@@ -1307,7 +1336,7 @@ function connectToInitialScanStream() {
             displayResults(currentUsername, currentFilter, currentAlbums.length);
         }
 
-        // Show stop button during scan (MOVED INSIDE onmessage handler)
+        // Show stop button during scan
         if (jobData.foundAlbums && jobData.foundAlbums.length > 0 && jobData.status === 'processing') {
             document.getElementById('stopEarlySection').style.display = 'block';
             document.getElementById('stopEarlyCount').textContent = currentAlbums.length;

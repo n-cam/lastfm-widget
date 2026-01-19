@@ -956,11 +956,12 @@ async function performProgressiveScan(jobId) {
     const endPage = Math.ceil(endRange / perPage);
     
     let albumIndex = startRange;
-    let processedCount = 0; // ✅ Track actual MusicBrainz lookups completed
+    let processedCount = 0; // ✅ Track ACTUAL MusicBrainz lookups completed
+    const totalToProcess = endRange - startRange;
     
     for (let page = startPage; page <= endPage; page++) {
       if (job.shouldStop) {
-        console.log(`  ⏸️  Scan stopped by user at album ${albumIndex}`);
+        console.log(`  ⏸️  Scan stopped by user at ${processedCount} processed`);
         updateJobProgress(jobId, { status: 'stopped' });
         return;
       }
@@ -1005,20 +1006,25 @@ async function performProgressiveScan(jobId) {
         }
         if (albumIndex >= endRange) break;
         
-        // ✅ DO THE MUSICBRAINZ LOOKUP FIRST
+        // ========================================
+        // CRITICAL FIX: Do MusicBrainz lookup FIRST
+        // ========================================
         const mbData = await getMusicBrainzData(a.artist.name, a.name);
         
-        // ✅ NOW UPDATE PROGRESS (after the slow part is done)
+        // ========================================
+        // CRITICAL FIX: Update progress AFTER the slow operation
+        // ========================================
         processedCount++;
-        const total = endRange - startRange;
+        
         updateJobProgress(jobId, {
           progress: { 
-            current: processedCount, 
-            total, 
-            percentage: Math.round((processedCount / total) * 100) 
+            current: processedCount,  // ✅ Use processedCount, NOT albumIndex
+            total: totalToProcess, 
+            percentage: Math.round((processedCount / totalToProcess) * 100) 
           }
         });
         
+        // Now check if album matches filters
         let matches = true;
         
         if (filters.year && mbData.release_year !== filters.year) {
@@ -1058,7 +1064,7 @@ async function performProgressiveScan(jobId) {
             console.log(`  🎯 Target reached! Found ${job.foundAlbums.length} new albums`);
             updateJobProgress(jobId, {
               status: 'complete',
-              progress: { current: total, total: total, percentage: 100 }
+              progress: { current: totalToProcess, total: totalToProcess, percentage: 100 }
             });
             return;
           }
@@ -1072,10 +1078,10 @@ async function performProgressiveScan(jobId) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    console.log(`  ✅ Scan complete. Found ${job.foundAlbums.length} new albums`);
+    console.log(`  ✅ Scan complete. Found ${job.foundAlbums.length} new albums. Processed ${processedCount} albums.`);
     updateJobProgress(jobId, { 
       status: 'complete',
-      progress: { current: endRange - startRange, total: endRange - startRange, percentage: 100 }
+      progress: { current: totalToProcess, total: totalToProcess, percentage: 100 }
     });
     
   } catch (err) {
