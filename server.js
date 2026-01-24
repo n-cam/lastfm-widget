@@ -426,23 +426,26 @@ function cleanAlbumName(name) {
   return cleaned || name;
 }
 
+// ------------------
+// 1. Normalization
+// ------------------
 function normalizeForComparison(str) {
   if (!str) return '';
   try {
-    return str.toLowerCase()
-      // 1. Standardize "Stylized" and "Fancy" characters
-      .replace(/[×✕✖]/g, 'x')      // Fixes Ed Sheeran (×) and Chloe × Halle
-      .replace(/\$/g, 's')         // Fixes Ke$ha (Ke$ha -> kesha)
-      .replace(/[‐‑‒–—]/g, '-')    // Fixes alt‐J
-      .replace(/[‘’]/g, "'")       // Fixes curly apostrophes
-      
-      // 2. Decompose accents (é -> e)
+    return str
+      .toLowerCase()
+      // Common symbol fixes
+      .replace(/[×✕✖]/g, 'x')      // Ed Sheeran ×, Chloe × Halle
+      .replace(/[÷]/g, '/')         // Math division symbols
+      .replace(/\$/g, 's')          // Ke$ha → kesha
+      .replace(/&/g, 'and')         // Ampersand → "and"
+      .replace(/[‘’“”]/g, "'")      // Curly quotes → straight
+      .replace(/[‐‑‒–—]/g, '-')     // Dashes → normal dash
+      // Decompose accents: é → e
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      
-      // 3. Keep letters (including foreign scripts), numbers, and spaces
-      // Use \p{L} for Unicode letter support (Kanji, Katakana, Hangul, etc.)
-      .replace(/[^\p{L}\p{N}\s]/gu, '') 
+      // Keep letters (Unicode), numbers, spaces
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
       .replace(/\s+/g, ' ')
       .trim();
   } catch (e) {
@@ -454,86 +457,96 @@ function normalizeForComparison(str) {
   }
 }
 
+// ------------------
+// 2. String Similarity (optional, robust matching)
+// ------------------
 function stringSimilarity(str1, str2) {
   const s1 = normalizeForComparison(str1);
   const s2 = normalizeForComparison(str2);
-  
+
   if (s1 === s2) return 1.0;
   if (s1.length === 0 || s2.length === 0) return 0.0;
+
+  // Short-circuit for substring matches
   if (s1.includes(s2) || s2.includes(s1)) return 0.85;
-  
-  const chars1 = new Set(s1);
-  const chars2 = new Set(s2);
-  const intersection = new Set([...chars1].filter(x => chars2.has(x)));
-  const union = new Set([...chars1, ...chars2]);
-  
-  const jaccard = intersection.size / union.size;
-  const lengthRatio = Math.min(s1.length, s2.length) / Math.max(s1.length, s2.length);
-  
-  return jaccard * 0.7 + lengthRatio * 0.3;
+
+  // Bigram Dice coefficient
+  const getBigrams = (str) => {
+    const bigrams = new Set();
+    for (let i = 0; i < str.length - 1; i++) {
+      bigrams.add(str.substring(i, i + 2));
+    }
+    return bigrams;
+  };
+
+  const b1 = getBigrams(s1);
+  const b2 = getBigrams(s2);
+  const intersection = new Set([...b1].filter(x => b2.has(x)));
+  const dice = (2.0 * intersection.size) / (b1.size + b2.size);
+
+  return dice;
 }
 
-// Add this helper function before buildSearchQueries
+// ------------------
+// 3. Title Case Helper
+// ------------------
 function toTitleCase(str) {
   if (!str) return str;
-  
-  // Special case: preserve single-letter album titles like "x" or "÷"
-  if (str.length === 1) return str;
-  
+  if (str.length === 1) return str; // Single letters like "X" or "÷"
+
   return str
     .toLowerCase()
     .split(' ')
     .map((word, index) => {
-      // Preserve single letters as-is (like "x" in "Chloe x Halle")
-      if (word.length === 1) return word;
-      
-      const lowercase = ['a', 'an', 'the', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'from'];
+      if (word.length === 1) return word; // preserve single letters
+      const lowercase = ['a','an','the','and','or','but','of','in','on','at','to','for','with','from'];
       if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1);
       return lowercase.includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join(' ');
 }
 
+// ------------------
+// 4. Build Search Queries
+// ------------------
 function buildSearchQueries(artist, album) {
   const queries = [];
-  
   const cleanA = artist.replace(/"/g, '');
   const cleanT = album.replace(/"/g, '');
 
-  // 1. Strict Exact Match (Best for accuracy)
+  // 1. Exact match (best)
   queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA}"`);
 
-  // 2. SHORT TITLE FIX (Fixes Ed Sheeran "X", Adele "21")
-  // If title is 2 chars or less, FORCE strict title matching to avoid noise
+  // 2. Short album titles (X, ÷)
   if (cleanT.length <= 2) {
-     queries.push(`releasegroup:"${cleanT}" AND artist:(${cleanA})`);
-     return queries; // Stop here for short titles to prevent bad matches
+    queries.push(`releasegroup:"${cleanT}" AND artist:(${cleanA})`);
+    return queries;
   }
-  
-  // 3. Strip "The" from Artist (Fixes 'The High Llamas')
+
+  // 3. Remove "The" from artist
   if (cleanA.toLowerCase().startsWith('the ')) {
     queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA.substring(4)}"`);
   }
 
-  // 4. "Split" Artist Search (Fixes "Elvis Costello & The Attractions")
-  // Searches for just "Elvis Costello" if the full band search fails
+  // 4. Split artist logic
   const splitTerms = [' & ', ' x ', ' feat ', ' ft ', ' with '];
   for (const term of splitTerms) {
     if (cleanA.toLowerCase().includes(term)) {
-        const primaryArtist = cleanA.split(new RegExp(term, 'i'))[0];
-        if (primaryArtist.length > 2) {
-            queries.push(`releasegroup:"${cleanT}" AND artist:"${primaryArtist}"`);
-        }
+      const primaryArtist = cleanA.split(new RegExp(term, 'i'))[0];
+      if (primaryArtist.length > 2) {
+        queries.push(`releasegroup:"${cleanT}" AND artist:"${primaryArtist}"`);
+      }
     }
   }
 
-  // 5. Loose/Fuzzy Search (Fixes punctuation issues like Mama's Gun)
-  queries.push(`releasegroup:(${cleanT}) AND artist:(${cleanA})`);
+  // 5. Loose/fuzzy search (punctuation, dots, accents)
+  const fuzzyA = cleanA.replace(/\./g, ' ');
+  const fuzzyT = cleanT.replace(/\./g, ' ');
+  queries.push(`releasegroup:(${fuzzyT}) AND artist:(${fuzzyA})`);
 
-  // 6. Super Loose (Remove special chars)
+  // 6. Super loose (remove special chars)
   const albumNoSpecial = cleanT.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const artistNoSpecial = cleanA.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  
   if (albumNoSpecial !== cleanT || artistNoSpecial !== cleanA) {
     queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artistNoSpecial}"`);
   }
@@ -753,12 +766,13 @@ async function getMusicBrainzData(artist, album) {
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
-      // 1. Primary sort: Score (Descending)
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      // 2. Secondary sort: Year (Ascending/Oldest first)
-      return (a.year || 9999) - (b.year || 9999);
+      // 1. Primary sort: Score (Highest first)
+      if (b.score !== a.score) return b.score - a.score;
+      
+      // 2. Secondary sort: Year (Oldest first)
+      const yearA = a.year || 9999;
+      const yearB = b.year || 9999;
+      return yearA - yearB;
     });
 
     if (candidates.length > 0 && candidates[0].score > 200) {
