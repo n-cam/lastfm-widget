@@ -302,40 +302,43 @@ async function callLastFmAPI(method, params = {}, retries = 3) {
   for (let attempt = 0; attempt < retries; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
+    const isLastAttempt = attempt === retries - 1;
     
     try {
       const response = await fetch(url.toString(), { 
         signal: controller.signal,
-        headers: { 'User-Agent': 'LastFmTopAlbums/1.0.0' }
+        headers: { 'User-Agent': 'LastFmTopAlbums/1.0.0 (contact@sortedsongs.com)' }
       });
       
       clearTimeout(timeout);
-      
-      if (response.status === 429) {
+
+      // Handle specific retryable status codes
+      if ((response.status === 429 || response.status === 503) && !isLastAttempt) {
         const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`⏳ Last.fm rate limit, waiting ${waitTime/1000}s...`);
-        await new Promise(r => setTimeout(r, waitTime));
-        continue;
-      }
-      
-      if (response.status === 503 && attempt < retries - 1) {
-        const waitTime = Math.pow(2, attempt) * 1000;
-        console.log(`⏳ Last.fm unavailable, retry in ${waitTime/1000}s...`);
+        console.warn(`⏳ Last.fm ${response.status}, retrying in ${waitTime/1000}s...`);
         await new Promise(r => setTimeout(r, waitTime));
         continue;
       }
       
       if (!response.ok) {
-        throw new Error(`Last.fm API error: ${response.status}`);
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // RED FLAG 2 FIX: Check for Last.fm internal errors
+      if (data.error) {
+        throw new Error(`Last.fm Error ${data.error}: ${data.message}`);
       }
       
-      return await response.json();
+      return data;
       
     } catch (err) {
       clearTimeout(timeout);
       
-      if (attempt === retries - 1) {
-        throw new Error(`Last.fm API failed after ${retries} attempts: ${err.message}`);
+      // RED FLAG 1 FIX: Throw on last attempt or non-retryable error
+      if (isLastAttempt || err.name === 'AbortError') {
+        throw new Error(`Last.fm API failed: ${err.message}`);
       }
       
       const waitTime = Math.pow(2, attempt) * 1000;
@@ -684,7 +687,7 @@ async function getMusicBrainzData(artist, album) {
       await new Promise(resolve => setTimeout(resolve, 1100)); 
       
       const response = await fetch(mbUrl, {
-        headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )` }
+        headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@sortedsongs.com'} )` }
       });
       
       if (!response.ok) continue;
