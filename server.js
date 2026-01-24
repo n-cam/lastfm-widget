@@ -516,44 +516,70 @@ function buildSearchQueries(artist, album) {
   const cleanA = artist.replace(/"/g, '');
   const cleanT = album.replace(/"/g, '');
 
-  // 1. Exact match (best)
+  // 1. Exact match
   queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA}"`);
 
-  // 2. Short album titles (X, ÷)
+  // 2. Short album titles (≤ 2 chars)
   if (cleanT.length <= 2) {
     queries.push(`releasegroup:"${cleanT}" AND artist:(${cleanA})`);
-    return queries;
+    return [...new Set(queries)];
   }
 
-  // 3. Remove "The" from artist
+  // 3. Try without " - EP" suffix
+  if (cleanT.match(/\s*-?\s*EP$/i)) {
+    const withoutEP = cleanT.replace(/\s*-?\s*EP$/i, '').trim();
+    queries.push(`releasegroup:"${withoutEP}" AND artist:"${cleanA}"`);
+  }
+
+  // 4. Try without " - Single" suffix
+  if (cleanT.match(/\s*-?\s*Single$/i)) {
+    const withoutSingle = cleanT.replace(/\s*-?\s*Single$/i, '').trim();
+    queries.push(`releasegroup:"${withoutSingle}" AND artist:"${cleanA}"`);
+  }
+
+  // 5. Dual-language titles
+  const dualMatch = cleanT.match(/(.+?)\s*\((.+?)\)/);
+  if (dualMatch) {
+    queries.push(`releasegroup:"${dualMatch[1]}" AND artist:"${cleanA}"`);
+    queries.push(`releasegroup:"${dualMatch[2]}" AND artist:"${cleanA}"`);
+  }
+
+  // 6. Remove "The" from artist
   if (cleanA.toLowerCase().startsWith('the ')) {
     queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA.substring(4)}"`);
   }
 
-  // 4. Split artist logic
+  // 7. Split artist collabs
   const splitTerms = [' & ', ' x ', ' feat ', ' ft ', ' with '];
   for (const term of splitTerms) {
     if (cleanA.toLowerCase().includes(term)) {
-      const primaryArtist = cleanA.split(new RegExp(term, 'i'))[0];
-      if (primaryArtist.length > 2) {
-        queries.push(`releasegroup:"${cleanT}" AND artist:"${primaryArtist}"`);
+      const primary = cleanA.split(new RegExp(term, 'i'))[0].trim();
+      if (primary.length > 2) {
+        queries.push(`releasegroup:"${cleanT}" AND artist:"${primary}"`);
       }
     }
   }
 
-  // 5. Loose/fuzzy search (punctuation, dots, accents)
-  const fuzzyA = cleanA.replace(/\./g, ' ');
-  const fuzzyT = cleanT.replace(/\./g, ' ');
-  queries.push(`releasegroup:(${fuzzyT}) AND artist:(${fuzzyA})`);
+  // 8. Collapse spaces (for "Ju Ju" → "Juju")
+  if (cleanT.length > 4 && cleanT.includes(' ')) {
+    queries.push(`releasegroup:"${cleanT.replace(/\s+/g, '')}" AND artist:"${cleanA}"`);
+  }
 
-  // 6. Super loose (remove special chars)
+  // 9. Fuzzy punctuation
+  const fuzzyA = cleanA.replace(/\./g, ' ').trim();
+  const fuzzyT = cleanT.replace(/\./g, ' ').trim();
+  if (fuzzyA !== cleanA || fuzzyT !== cleanT) {
+    queries.push(`releasegroup:(${fuzzyT}) AND artist:(${fuzzyA})`);
+  }
+
+  // 10. Remove special chars
   const albumNoSpecial = cleanT.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const artistNoSpecial = cleanA.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   if (albumNoSpecial !== cleanT || artistNoSpecial !== cleanA) {
     queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artistNoSpecial}"`);
   }
 
-  return queries;
+  return [...new Set(queries)];
 }
 
 function validateArtistMatch(normInput, normRgMain, allArtists, artistSim, searchTitleLower, titleSim) {
@@ -629,8 +655,14 @@ function calculateMatchScore(
   if (normTitleMB === normTitleSearch) score += 1000;
 
   // Type Logic
+  // Smarter EP handling - strip " - EP" suffix before comparing
+  const searchWithoutEP = normTitleSearch.replace(/\s*ep$/i, '').trim();
+  const mbWithoutEP = normTitleMB.replace(/\s*ep$/i, '').trim();
+
+  if (primaryType === 'ep' && searchWithoutEP !== mbWithoutEP) {
+    score -= 500; // Reduced penalty since we stripped suffix
+  }
   if (primaryType === 'single' && normTitleMB !== normTitleSearch) score -= 1500;
-  if (primaryType === 'ep' && normTitleMB !== normTitleSearch) score -= 800;
   if (primaryType === 'album') score += 500;
   if (primaryType === 'album' && secondaryTypes.length === 0) score += 300;
 
@@ -760,14 +792,19 @@ async function getMusicBrainzData(artist, album) {
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
-        // 1. Primary sort: Score (highest first)
-        if (b.score !== a.score) return b.score - a.score;
-        
-        // 2. Secondary sort: Year (oldest first for ties)
-        const yearA = a.year || 9999;
-        const yearB = b.year || 9999;
-        return yearA - yearB;
-      });
+      // 1. Primary sort: Score (highest first)
+      if (b.score !== a.score) return b.score - a.score;
+      
+      // 2. Secondary sort: Prefer albums over EPs/singles (if scores tied)
+      const typeOrderA = a['primary-type'] === 'Album' ? 0 : a['primary-type'] === 'EP' ? 1 : 2;
+      const typeOrderB = b['primary-type'] === 'Album' ? 0 : b['primary-type'] === 'EP' ? 1 : 2;
+      if (typeOrderA !== typeOrderB) return typeOrderA - typeOrderB;
+      
+      // 3. Tertiary sort: Year (oldest first for remaining ties)
+      const yearA = a.year || 9999;
+      const yearB = b.year || 9999;
+      return yearA - yearB;
+    });
 
     // ⚠️ FIXED: Raised threshold to 800 (was 600 in suggestion)
     if (scored.length > 0 && scored[0].score > 800) {
