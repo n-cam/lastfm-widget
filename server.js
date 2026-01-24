@@ -466,6 +466,8 @@ function stringSimilarity(str1, str2) {
 
   if (s1 === s2) return 1.0;
   if (s1.length === 0 || s2.length === 0) return 0.0;
+  if (s1.length === 1 && s2.length === 1) return s1 === s2 ? 1.0 : 0.0;
+
 
   // Short-circuit for substring matches
   if (s1.includes(s2) || s2.includes(s1)) return 0.85;
