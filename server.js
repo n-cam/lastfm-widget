@@ -848,6 +848,20 @@ function formatQueryLog(username, params) {
   return `📊 ${username} → ${filterDesc} (limit: ${limit})`;
 }
 
+function formatScanDescription(username, filters, startRange, endRange) {
+  let filterDesc = 'all time';
+  
+  if (filters.year) {
+    filterDesc = `year ${filters.year}`;
+  } else if (filters.decade) {
+    filterDesc = `${filters.decade}s`;
+  } else if (filters.yearStart && filters.yearEnd) {
+    filterDesc = `${filters.yearStart}-${filters.yearEnd}`;
+  }
+  
+  return `🔍 [${username}] ${filterDesc} | Range: ${startRange}-${endRange}`;
+}
+
 async function performBackgroundUpdate(username, full, limit) {
   const processStart = Date.now();
   console.log(`🚀 [${new Date().toISOString()}] BACKGROUND: Starting update for ${username} (Limit: ${limit})`);
@@ -1023,11 +1037,19 @@ async function performProgressiveScan(jobId) {
   
   const { username, startRange, endRange, filters, targetLimit, currentCount } = job;
   
-  console.log(`\n🔍 Progressive Scan Started`);
-  console.log(`   User: ${username}`);
-  console.log(`   Range: ${startRange}-${endRange}`);
-  console.log(`   Target: ${targetLimit} albums`);
-  console.log(`   Job ID: ${jobId}`);
+  let filterDesc = 'all time';
+  if (filters.year) filterDesc = `year ${filters.year}`;
+  else if (filters.decade) filterDesc = `${filters.decade}s`;
+  else if (filters.yearStart && filters.yearEnd) filterDesc = `${filters.yearStart}-${filters.yearEnd}`;
+  
+  console.log(`\n${'='.repeat(70)}`);
+  console.log(`🔍 PROGRESSIVE SCAN STARTED`);
+  console.log(`   👤 User: ${username}`);
+  console.log(`   📅 Filter: ${filterDesc}`);
+  console.log(`   📊 Range: albums ${startRange}-${endRange}`);
+  console.log(`   🎯 Target: ${targetLimit} albums`);
+  console.log(`   🆔 Job ID: ${jobId}`);
+  console.log(`${'='.repeat(70)}`);
   
   try {
     // Step 1: Fetch all albums from Last.fm (FAST - ~1 second)
