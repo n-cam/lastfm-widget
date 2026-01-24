@@ -674,12 +674,11 @@ async function getMusicBrainzData(artist, album) {
   const cleanedArtist = cleanArtistName(artist);
   const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
   
+  // Check caches first (your existing code)
   if (mbGlobalCache.has(cacheKey)) return mbGlobalCache.get(cacheKey);
-  
-  // REDUCED CACHE FAILURE TIME: 24h -> 1h (easier for debugging/retries)
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
-    if (Date.now() - failTime < 60 * 60 * 1000) { 
+    if (Date.now() - failTime < 60 * 60 * 1000) {
       return { 
         canonical_name: toTitleCase(cleanedAlbum), 
         canonical_artist: toTitleCase(cleanedArtist), 
@@ -693,13 +692,14 @@ async function getMusicBrainzData(artist, album) {
   try {
     const queries = buildSearchQueries(cleanedArtist, cleanedAlbum);
     
-    let allCandidates = [];
+    let bestCandidates = [];
+    
+    // ✅ EARLY EXIT - stop after first successful query
     for (const queryString of queries) {
       const query = encodeURIComponent(queryString);
-      // INCREASED LIMIT 15 -> 25
-      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=25`; 
+      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=25`;
       
-      await new Promise(resolve => setTimeout(resolve, 1100)); 
+      await new Promise(resolve => setTimeout(resolve, 1100));
       
       const response = await fetch(mbUrl, {
         headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@sortedsongs.com'} )` }
@@ -708,55 +708,35 @@ async function getMusicBrainzData(artist, album) {
       if (!response.ok) continue;
       
       const data = await response.json();
-      if (data['release-groups'] && data['release-groups'].length > 0) {
-        allCandidates.push(...data['release-groups']);
-        // If we found a perfect score, we can stop querying
-        if (data['release-groups'][0].score === 100) break;
-        if (allCandidates.length >= 40) break;
+      if (data['release-groups']?.length) {
+        bestCandidates = data['release-groups'];
+        break; // ✅ STOP querying once we have results
       }
     }
     
-    if (allCandidates.length === 0) throw new Error("No candidates found");
+    if (bestCandidates.length === 0) throw new Error("No candidates found");
     
-    const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
-
-    const candidates = uniqueCandidates
+    // Filter and score candidates
+    const scored = bestCandidates
       .filter(rg => {
         if (!rg['first-release-date']) return false;
-
-        const rgType = (rg['primary-type'] || rg.type || '').toLowerCase();
-        if (rgType && rgType !== 'album' && rgType !== 'ep') return false;
-
+        
+        const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
         const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
-
-        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
-        const artistSim = stringSimilarity(artist, rgArtistMain);
-
-        const combinedSim = titleSim * 0.7 + artistSim * 0.3;
-        if (combinedSim < 0.75) return false;
-
-        const allArtists = (rg['artist-credit'] || [])
-          .map(a => normalizeForComparison(a.name || ""));
-
         const normInput = normalizeForComparison(artist);
         const normRgMain = normalizeForComparison(rgArtistMain);
-
-        const artistMatch = validateArtistMatch(
-          normInput,
-          normRgMain,
-          allArtists,
-          artistSim,
-          cleanedAlbum.toLowerCase(),
-          titleSim
-        );
+        
+        const titleSim = stringSimilarity(cleanedAlbum, rg.title);
+        const artistSim = stringSimilarity(artist, rgArtistMain);
+        
+        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, cleanedAlbum.toLowerCase(), titleSim);
         if (!artistMatch) return false;
-
+        
         const minTitleSim = (artistSim > 0.95) ? 0.5 : 0.65;
         if (titleSim < minTitleSim) return false;
-
+        
         return true;
-            })
-
+      })
       .map(rg => {
         const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
         const primaryType = rg['primary-type']?.toLowerCase() || null;
@@ -768,44 +748,30 @@ async function getMusicBrainzData(artist, album) {
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
 
-        const mbArtist = rg['artist-credit']?.[0]?.name || "";
-
-        const artistSimilarity = stringSimilarity(artist, mbArtist);
+        const artistSimilarity = stringSimilarity(artist, rgArtist);
         const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-
-        const baseSimilarityScore =
-          titleSimilarity * 0.7 +
-          artistSimilarity * 0.3;
-
+        
         const score = calculateMatchScore(
-          artistSimilarity,
-          titleSimilarity,
-          cleanedAlbum,
-          rg.title,
-          normInput,
-          normRg,
-          normTitleMB,
-          normTitleSearch,
-          cleanedAlbum.toLowerCase(),
-          primaryType,
-          secondaryTypes
-        ) + (baseSimilarityScore * 200); // boost good combined matches
-
+          artistSimilarity, titleSimilarity, cleanedAlbum, rg.title,
+          normInput, normRg, normTitleMB, normTitleSearch,
+          cleanedAlbum.toLowerCase(), primaryType, secondaryTypes
+        );
 
         return { ...rg, score, year, rgArtist };
       })
       .sort((a, b) => {
-      // 1. Primary sort: Score (Highest first)
-      if (b.score !== a.score) return b.score - a.score;
-      
-      // 2. Secondary sort: Year (Oldest first)
-      const yearA = a.year || 9999;
-      const yearB = b.year || 9999;
-      return yearA - yearB;
-    });
+        // 1. Primary sort: Score (highest first)
+        if (b.score !== a.score) return b.score - a.score;
+        
+        // 2. Secondary sort: Year (oldest first for ties)
+        const yearA = a.year || 9999;
+        const yearB = b.year || 9999;
+        return yearA - yearB;
+      });
 
-    if (candidates.length > 0 && candidates[0].score > 600) {
-      const best = candidates[0];
+    // ⚠️ FIXED: Raised threshold to 800 (was 600 in suggestion)
+    if (scored.length > 0 && scored[0].score > 800) {
+      const best = scored[0];
       const result = {
         musicbrainz_id: best.id,
         release_year: best.year,
@@ -817,7 +783,7 @@ async function getMusicBrainzData(artist, album) {
       return result;
     }
     
-    throw new Error(`No high-quality match (best score: ${candidates[0]?.score || 0})`);
+    throw new Error(`No high-quality match (best score: ${scored[0]?.score || 0})`);
 
   } catch (err) {
     console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
