@@ -804,7 +804,7 @@ async function getMusicBrainzData(artist, album) {
       return yearA - yearB;
     });
 
-    if (candidates.length > 0 && candidates[0].score > 800) {
+    if (candidates.length > 0 && candidates[0].score > 600) {
       const best = candidates[0];
       const result = {
         musicbrainz_id: best.id,
