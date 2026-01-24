@@ -948,20 +948,24 @@ async function performProgressiveScan(jobId) {
   
   const { username, startRange, endRange, filters, targetLimit, currentCount } = job;
   
-  console.log(`\n🔍 Starting progressive scan: ${username} | Range: ${startRange}-${endRange}`);
+  console.log(`\n🔍 Progressive Scan Started`);
+  console.log(`   User: ${username}`);
+  console.log(`   Range: ${startRange}-${endRange}`);
+  console.log(`   Target: ${targetLimit} albums`);
+  console.log(`   Job ID: ${jobId}`);
   
   try {
+    // Step 1: Fetch all albums from Last.fm (FAST - ~1 second)
+    console.log(`\n📡 Step 1: Fetching from Last.fm...`);
     const perPage = 500;
     const startPage = Math.ceil(startRange / perPage);
     const endPage = Math.ceil(endRange / perPage);
     
-    let albumIndex = startRange;
-    let processedCount = 0; // ✅ Track ACTUAL MusicBrainz lookups completed
-    const totalToProcess = endRange - startRange;
+    let allLastFmAlbums = [];
     
     for (let page = startPage; page <= endPage; page++) {
       if (job.shouldStop) {
-        console.log(`  ⏸️  Scan stopped by user at ${processedCount} processed`);
+        console.log(`  ⏸️  Scan stopped during Last.fm fetch`);
         updateJobProgress(jobId, { status: 'stopped' });
         return;
       }
@@ -994,98 +998,116 @@ async function performProgressiveScan(jobId) {
         ? pageData.topalbums.album 
         : [pageData.topalbums.album];
       
-      for (const a of albums) {
-        if (job.shouldStop) {
-          updateJobProgress(jobId, { status: 'stopped' });
-          return;
-        }
-        
-        if (albumIndex < startRange) {
-          albumIndex++;
-          continue;
-        }
-        if (albumIndex >= endRange) break;
-        
-        // ========================================
-        // CRITICAL FIX: Do MusicBrainz lookup FIRST
-        // ========================================
-        const mbData = await getMusicBrainzData(a.artist.name, a.name);
-        
-        // ========================================
-        // CRITICAL FIX: Update progress AFTER the slow operation
-        // ========================================
-        processedCount++;
-        
-        updateJobProgress(jobId, {
-          progress: { 
-            current: processedCount,  // ✅ Use processedCount, NOT albumIndex
-            total: totalToProcess, 
-            percentage: Math.round((processedCount / totalToProcess) * 100) 
-          }
-        });
-        
-        // Now check if album matches filters
-        let matches = true;
-        
-        if (filters.year && mbData.release_year !== filters.year) {
-          matches = false;
-        }
-        
-        if (filters.decade) {
-          const decadeEnd = filters.decade + 9;
-          if (!mbData.release_year || mbData.release_year < filters.decade || mbData.release_year > decadeEnd) {
-            matches = false;
-          }
-        }
-        
-        if (filters.yearStart && filters.yearEnd) {
-          if (!mbData.release_year || mbData.release_year < filters.yearStart || mbData.release_year > filters.yearEnd) {
-            matches = false;
-          }
-        }
-        
-        if (matches) {
-          const newAlbum = {
-            name: a.name,
-            artist: a.artist.name,
-            playcount: parseInt(a.playcount),
-            url: a.url,
-            image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
-            release_year: mbData.release_year,
-            musicbrainz_id: mbData.musicbrainz_id,
-            type: mbData.type
-          };
-          
-          job.foundAlbums.push(newAlbum);
-          
-          console.log(`  ✓ Found #${currentCount + job.foundAlbums.length}: ${a.name} (${mbData.release_year})`);
-          
-          if (currentCount + job.foundAlbums.length >= targetLimit) {
-            console.log(`  🎯 Target reached! Found ${job.foundAlbums.length} new albums`);
-            updateJobProgress(jobId, {
-              status: 'complete',
-              progress: { current: totalToProcess, total: totalToProcess, percentage: 100 }
-            });
-            return;
-          }
-        }
-        
-        albumIndex++;
+      allLastFmAlbums.push(...albums);
+      
+      if (page < endPage) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
-      
-      if (albumIndex >= endRange) break;
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    console.log(`  ✅ Scan complete. Found ${job.foundAlbums.length} new albums. Processed ${processedCount} albums.`);
+    // Filter to the correct range
+    const albumsToProcess = allLastFmAlbums.slice(
+      Math.max(0, startRange - 1),
+      Math.min(allLastFmAlbums.length, endRange)
+    );
+    
+    console.log(`✅ Last.fm fetch complete: ${albumsToProcess.length} albums to process`);
+    
+    // Step 2: Process each album with MusicBrainz (SLOW - 1.1s each)
+    console.log(`\n🎵 Step 2: Processing albums with MusicBrainz...`);
+    
+    let processedCount = 0;
+    const totalToProcess = albumsToProcess.length;
+    
+    for (const a of albumsToProcess) {
+      if (job.shouldStop) {
+        console.log(`  ⏸️  Scan stopped at ${processedCount}/${totalToProcess}`);
+        updateJobProgress(jobId, { status: 'stopped' });
+        return;
+      }
+      
+      // ========================================
+      // CRITICAL: Do the SLOW MusicBrainz lookup
+      // ========================================
+      const mbData = await getMusicBrainzData(a.artist.name, a.name);
+      
+      // ========================================
+      // CRITICAL: Update progress AFTER completion
+      // ========================================
+      processedCount++;
+      
+      // Send progress update to all connected clients
+      updateJobProgress(jobId, {
+        progress: { 
+          current: processedCount,
+          total: totalToProcess, 
+          percentage: Math.round((processedCount / totalToProcess) * 100) 
+        }
+      });
+      
+      // Check if album matches filters
+      let matches = true;
+      
+      if (filters.year && mbData.release_year !== filters.year) {
+        matches = false;
+      }
+      
+      if (filters.decade) {
+        const decadeEnd = filters.decade + 9;
+        if (!mbData.release_year || mbData.release_year < filters.decade || mbData.release_year > decadeEnd) {
+          matches = false;
+        }
+      }
+      
+      if (filters.yearStart && filters.yearEnd) {
+        if (!mbData.release_year || mbData.release_year < filters.yearStart || mbData.release_year > filters.yearEnd) {
+          matches = false;
+        }
+      }
+      
+      // If matches, add to results
+      if (matches) {
+        const newAlbum = {
+          name: a.name,
+          artist: a.artist.name,
+          playcount: parseInt(a.playcount),
+          url: a.url,
+          image: a.image.find(img => img.size === 'extralarge')?.['#text'] || '',
+          release_year: mbData.release_year,
+          musicbrainz_id: mbData.musicbrainz_id,
+          type: mbData.type
+        };
+        
+        job.foundAlbums.push(newAlbum);
+        
+        if (processedCount % 10 === 0 || job.foundAlbums.length <= 5) {
+          console.log(`  Progress: ${processedCount}/${totalToProcess} processed, ${job.foundAlbums.length} found`);
+        }
+        
+        // Check if we've reached target
+        if (currentCount + job.foundAlbums.length >= targetLimit) {
+          console.log(`\n🎯 Target reached! ${job.foundAlbums.length} albums found`);
+          updateJobProgress(jobId, {
+            status: 'complete',
+            progress: { current: totalToProcess, total: totalToProcess, percentage: 100 }
+          });
+          return;
+        }
+      }
+    }
+    
+    // Scan complete
+    console.log(`\n✅ Scan complete`);
+    console.log(`   Processed: ${processedCount} albums`);
+    console.log(`   Found: ${job.foundAlbums.length} matching albums`);
+    
     updateJobProgress(jobId, { 
       status: 'complete',
       progress: { current: totalToProcess, total: totalToProcess, percentage: 100 }
     });
     
   } catch (err) {
-    console.error(`  ❌ Scan error:`, err);
+    console.error(`\n❌ Scan error:`, err);
     updateJobProgress(jobId, { 
       status: 'error',
       error: err.message

@@ -1070,6 +1070,7 @@
     let scanEventSource = null;
     let isInitialScanActive = false;
     let initialScanAbortController = null;
+    let scanGeneration = 0;
 
     // Filter tabs
     document.querySelectorAll('.tab').forEach(tab => {
@@ -1106,14 +1107,36 @@
 document.getElementById('searchForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    // Prevent duplicate scans
-    if (isInitialScanActive) {
-        console.log('Scan already in progress');
-        return;
+    // CRITICAL: Increment generation FIRST to invalidate any pending messages
+    scanGeneration++;
+    console.log(`🔄 New search started - Generation ${scanGeneration}`);
+    
+    // CRITICAL: Close old connections immediately
+    if (scanEventSource) {
+        console.log('Closing old EventSource');
+        scanEventSource.close();
+        scanEventSource = null;
     }
+    
+    // CRITICAL: Stop old job if exists
+    if (activeScanJobId) {
+        console.log(`Stopping old job: ${activeScanJobId}`);
+        try {
+            await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to stop old job:', e);
+        }
+        activeScanJobId = null;
+    }
+    
+    // CRITICAL: Reset scan state
+    isInitialScanActive = false;
+    
+    // CRITICAL: Wait for cleanup
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     const username = document.getElementById('username').value.trim();
-    currentUsername = username; // Store username
+    currentUsername = username;
     const activeFilter = document.querySelector('.tab.active').dataset.filter;
     currentLimit = parseInt(document.getElementById('limit').value);
 
@@ -1132,21 +1155,21 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
     }
 
     currentFilter = filterText;
-    currentAlbums = []; // Clear previous results
+    
+    // CRITICAL: Clear albums and grid AFTER stopping old job
+    currentAlbums = [];
+    document.getElementById('albumsGrid').innerHTML = '';
 
     hideAll();
     
-    // For filtered queries, use progressive scan
     const hasFilter = activeFilter !== 'all';
     
     if (hasFilter) {
         await startProgressiveScan();
     } else {
-        // Standard loading for "all time"
         document.getElementById('loading').style.display = 'block';
         document.getElementById('submitBtn').disabled = true;
         
-        // Build URL with filters
         let url = `${API_URL}?user=${encodeURIComponent(currentUsername)}&limit=${currentLimit}`;
         
         try {
@@ -1179,51 +1202,23 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
 });
 
     async function startProgressiveScan() {
-    // CRITICAL: Create a generation counter to invalidate old messages
-    if (typeof window.scanGeneration === 'undefined') {
-        window.scanGeneration = 0;
-    }
-    window.scanGeneration++;
-    const thisGeneration = window.scanGeneration;
+    // Capture the current generation for this scan
+    const thisGeneration = scanGeneration;
+    console.log(`🚀 Starting scan - Generation ${thisGeneration}`);
     
-    console.log(`🆕 Starting new scan (Generation ${thisGeneration})`);
-    
-    // Close old EventSource FIRST
-    if (scanEventSource) {
-        console.log('Closing old EventSource');
-        scanEventSource.close();
-        scanEventSource = null;
-    }
-    
-    // Stop old job on server if exists
-    if (activeScanJobId) {
-        try {
-            console.log(`Stopping old job: ${activeScanJobId}`);
-            await fetch(`/api/scan-stop/${activeScanJobId}`, { method: 'POST' });
-        } catch (e) {
-            console.error('Failed to stop old job:', e);
-        }
-        activeScanJobId = null;
-    }
-    
-    // CRITICAL: Wait for old connections to fully close
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Prevent multiple scans
+    // Prevent overlapping scans
     if (isInitialScanActive) {
-        console.log('Scan already in progress');
+        console.log('❌ Scan already active, aborting');
         return;
     }
     
     isInitialScanActive = true;
     
-    // Clear state AFTER stopping old job
-    currentAlbums = [];
-    document.getElementById('albumsGrid').innerHTML = '';
-    
+    // UI Setup
     document.getElementById('submitBtn').disabled = true;
     document.getElementById('initialScanProgress').style.display = 'block';
     document.getElementById('results').style.display = 'block';
+    document.getElementById('stopEarlySection').style.display = 'none';
     
     // Reset progress UI
     document.getElementById('initialScanned').textContent = '0';
@@ -1232,7 +1227,6 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
     document.getElementById('initialProgressFill').style.width = '0%';
     document.getElementById('initialProgressText').textContent = 'Starting...';
     document.getElementById('initialScanMessage').textContent = 'Initializing scan...';
-    document.getElementById('stopEarlySection').style.display = 'none';
     
     displayResults(currentUsername, currentFilter, 0);
     
@@ -1256,7 +1250,6 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
     }
 
     try {
-        // Start the job
         const response = await fetch('/api/scan-more', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1274,7 +1267,9 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
         const data = await response.json();
         activeScanJobId = data.jobId;
 
-        // Connect to stream with generation validation
+        console.log(`✅ Job started: ${activeScanJobId}`);
+        
+        // Connect with generation check
         connectToInitialScanStream(thisGeneration);
 
     } catch (err) {
@@ -1284,39 +1279,26 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
 
 
 function connectToInitialScanStream(expectedGeneration) {
-    if (scanEventSource) {
-        scanEventSource.close();
-    }
-
-    console.log(`📡 Connecting to stream for Generation ${expectedGeneration}`);
+    console.log(`📡 Connecting stream for Generation ${expectedGeneration}, Job ${activeScanJobId}`);
+    
     scanEventSource = new EventSource(`/api/scan-stream/${activeScanJobId}`);
-
+    
     scanEventSource.onmessage = (event) => {
-        // TRIPLE VALIDATION to prevent stale messages
-        
-        // Validation 1: Check generation counter
-        if (window.scanGeneration !== expectedGeneration) {
-            console.log(`❌ Ignoring message from old generation (expected: ${expectedGeneration}, current: ${window.scanGeneration})`);
+        // CRITICAL VALIDATION: Check generation first
+        if (scanGeneration !== expectedGeneration) {
+            console.log(`🚫 Rejected: Wrong generation (expected ${expectedGeneration}, current ${scanGeneration})`);
             return;
         }
         
-        // Validation 2: Check if scan is still active
+        // CRITICAL VALIDATION: Check if scan is still active
         if (!isInitialScanActive) {
-            console.log('❌ Ignoring message - scan no longer active');
+            console.log(`🚫 Rejected: Scan no longer active`);
             return;
         }
-        
-        // Validation 3: Verify job ID hasn't changed
-        const currentJobId = activeScanJobId;
         
         const jobData = JSON.parse(event.data);
         
-        if (activeScanJobId !== currentJobId) {
-            console.log('❌ Ignoring message - job ID changed');
-            return;
-        }
-        
-        // ALL VALIDATIONS PASSED - process the message
+        console.log(`📨 Message received for Generation ${expectedGeneration}: ${jobData.foundAlbums?.length || 0} albums`);
         
         // Update Progress UI
         updateInitialScanProgress({
@@ -1326,9 +1308,11 @@ function connectToInitialScanStream(expectedGeneration) {
             message: jobData.timeRemaining ? `Estimated time: ${jobData.timeRemaining}` : 'Scanning...'
         });
 
-        // Live Update of Grid
+        // Live Update of Grid - ONLY add new albums
         if (jobData.foundAlbums && jobData.foundAlbums.length > currentAlbums.length) {
             const newAlbums = jobData.foundAlbums.slice(currentAlbums.length);
+            console.log(`➕ Adding ${newAlbums.length} new albums`);
+            
             for (const album of newAlbums) {
                 currentAlbums.push(album);
                 addAlbumToGrid(album, currentAlbums.length - 1);
@@ -1344,6 +1328,7 @@ function connectToInitialScanStream(expectedGeneration) {
 
         // Handle Completion
         if (jobData.status === 'complete' || jobData.status === 'stopped' || jobData.status === 'error') {
+            console.log(`🏁 Scan finished: ${jobData.status}`);
             if (scanEventSource) {
                 scanEventSource.close();
                 scanEventSource = null;
@@ -1353,7 +1338,7 @@ function connectToInitialScanStream(expectedGeneration) {
     };
 
     scanEventSource.onerror = (err) => {
-        console.error('Stream error:', err);
+        console.error('❌ Stream error:', err);
         if (scanEventSource) {
             scanEventSource.close();
             scanEventSource = null;
@@ -1393,46 +1378,47 @@ function connectToInitialScanStream(expectedGeneration) {
     }
 
     function addAlbumToGrid(album, index) {
-        const grid = document.getElementById('albumsGrid');
-        const card = document.createElement('div');
-        card.className = 'album-card new';
-        
-        const displayName = album.name || 'Unknown Album';
-        const displayArtist = album.artist || 'Unknown Artist';
-        const displayUrl = album.url || '#';
+    console.log(`🎵 Adding album to grid: #${index + 1} - ${album.name}`);
+    
+    const grid = document.getElementById('albumsGrid');
+    const card = document.createElement('div');
+    card.className = 'album-card new';
+    
+    const displayName = album.name || 'Unknown Album';
+    const displayArtist = album.artist || 'Unknown Artist';
+    const displayUrl = album.url || '#';
 
-        card.onclick = () => {
-            if (displayUrl !== '#') window.open(displayUrl, '_blank');
-        };
+    card.onclick = () => {
+        if (displayUrl !== '#') window.open(displayUrl, '_blank');
+    };
 
-        const rawUrl = album.image;
-        const imageUrl = rawUrl && rawUrl.length > 5
-            ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
-            : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
+    const rawUrl = album.image;
+    const imageUrl = rawUrl && rawUrl.length > 5
+        ? `/api/proxy-image?url=${encodeURIComponent(rawUrl)}` 
+        : 'https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image';
 
-        card.innerHTML = `
-            <img 
-                src="${imageUrl}" 
-                alt="${displayName}"
-                class="album-cover"
-                crossorigin="anonymous" 
-                onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
-            >
-            <div class="album-info">
-                <div class="album-name" title="${displayName}">${displayName}</div>
-                <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
-                <div class="album-meta">
-                    <span class="album-rank">#${index + 1}</span>
-                    <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
-                    <span class="album-year">${album.release_year || '?'}</span>
-                </div>
+    card.innerHTML = `
+        <img 
+            src="${imageUrl}" 
+            alt="${displayName}"
+            class="album-cover"
+            crossorigin="anonymous" 
+            onerror="this.src='https://placehold.co/300x300/C4E0E0/4A1DC0?text=No+Image'"
+        >
+        <div class="album-info">
+            <div class="album-name" title="${displayName}">${displayName}</div>
+            <div class="album-artist" title="${displayArtist}">${displayArtist}</div>
+            <div class="album-meta">
+                <span class="album-rank">#${index + 1}</span>
+                <span class="album-playcount">${(album.playcount || 0).toLocaleString()}</span>
+                <span class="album-year">${album.release_year || '?'}</span>
             </div>
-        `;
-        grid.appendChild(card);
-        
-        // Remove 'new' class after animation
-        setTimeout(() => card.classList.remove('new'), 400);
-    }
+        </div>
+    `;
+    grid.appendChild(card);
+    
+    setTimeout(() => card.classList.remove('new'), 400);
+}
 
     // Mock getMusicBrainzData for client-side (in real app, this would be a backend call)
     async function getMusicBrainzData(artist, album) {
