@@ -513,43 +513,55 @@ function toTitleCase(str) {
 // ------------------
 function buildSearchQueries(artist, album) {
   const queries = [];
-  const cleanA = artist.replace(/"/g, '');
-  const cleanT = album.replace(/"/g, '');
+  const cleanA = artist.replace(/"/g, '').trim();
+  const cleanT = album.replace(/"/g, '').trim();
 
-  // 1. Exact match
+  // 1. EXACT FULL TITLE (Fixes Taylor Swift : The Anthology)
+  // Try the full string with punctuation first
   queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA}"`);
 
-  // 2. Short album titles (≤ 2 chars)
-  if (cleanT.length <= 2) {
-    queries.push(`releasegroup:"${cleanT}" AND artist:(${cleanA})`);
-    return [...new Set(queries)];
+  // 2. Soundtrack / Cast logic (Fixes Wicked)
+  // If the album title has "soundtrack" or artist contains "cast", search title only
+  if (
+  cleanT.toLowerCase().includes('soundtrack') || 
+  cleanA.toLowerCase().includes('cast') || 
+  cleanA.toLowerCase().includes('various artists')
+) {
+  queries.push(`releasegroup:"${cleanT}"`);
+}
+
+
+  // 3. Dual-language / Subtitle split
+  const subtitleMatch = cleanT.match(/^(.+?)[:(].+$/);
+  if (subtitleMatch) {
+    queries.push(`releasegroup:"${subtitleMatch[1].trim()}" AND artist:"${cleanA}"`);
   }
 
-  // 3. Try without " - EP" suffix
+  // 4. Try without " - EP" suffix
   if (cleanT.match(/\s*-?\s*EP$/i)) {
     const withoutEP = cleanT.replace(/\s*-?\s*EP$/i, '').trim();
     queries.push(`releasegroup:"${withoutEP}" AND artist:"${cleanA}"`);
   }
 
-  // 4. Try without " - Single" suffix
+  // 5. Try without " - Single" suffix
   if (cleanT.match(/\s*-?\s*Single$/i)) {
     const withoutSingle = cleanT.replace(/\s*-?\s*Single$/i, '').trim();
     queries.push(`releasegroup:"${withoutSingle}" AND artist:"${cleanA}"`);
   }
 
-  // 5. Dual-language titles
+  // 6. Dual-language titles
   const dualMatch = cleanT.match(/(.+?)\s*\((.+?)\)/);
   if (dualMatch) {
     queries.push(`releasegroup:"${dualMatch[1]}" AND artist:"${cleanA}"`);
     queries.push(`releasegroup:"${dualMatch[2]}" AND artist:"${cleanA}"`);
   }
 
-  // 6. Remove "The" from artist
+  // 7. Remove "The" from artist
   if (cleanA.toLowerCase().startsWith('the ')) {
     queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA.substring(4)}"`);
   }
 
-  // 7. Split artist collabs
+  // 8. Split artist collabs
   const splitTerms = [' & ', ' x ', ' feat ', ' ft ', ' with '];
   for (const term of splitTerms) {
     if (cleanA.toLowerCase().includes(term)) {
@@ -560,19 +572,19 @@ function buildSearchQueries(artist, album) {
     }
   }
 
-  // 8. Collapse spaces (for "Ju Ju" → "Juju")
+  // 9. Collapse spaces (for "Ju Ju" → "Juju")
   if (cleanT.length > 4 && cleanT.includes(' ')) {
     queries.push(`releasegroup:"${cleanT.replace(/\s+/g, '')}" AND artist:"${cleanA}"`);
   }
 
-  // 9. Fuzzy punctuation
+  // 10. Fuzzy punctuation
   const fuzzyA = cleanA.replace(/\./g, ' ').trim();
   const fuzzyT = cleanT.replace(/\./g, ' ').trim();
   if (fuzzyA !== cleanA || fuzzyT !== cleanT) {
     queries.push(`releasegroup:(${fuzzyT}) AND artist:(${fuzzyA})`);
   }
 
-  // 10. Remove special chars
+  // 11. Remove special chars
   const albumNoSpecial = cleanT.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const artistNoSpecial = cleanA.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   if (albumNoSpecial !== cleanT || artistNoSpecial !== cleanA) {
