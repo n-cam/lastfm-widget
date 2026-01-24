@@ -722,29 +722,41 @@ async function getMusicBrainzData(artist, album) {
 
     const candidates = uniqueCandidates
       .filter(rg => {
-        // [Keep your existing filter logic here, it is fine with the updated scoring]
-        // Just make sure to use the new calculateMatchScore function
-        
-        // ... (copy your existing filter block or paste the full function if needed)
-        // Ensure you check rg['first-release-date'] exists
         if (!rg['first-release-date']) return false;
 
-        const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
+        const rgType = (rg['primary-type'] || rg.type || '').toLowerCase();
+        if (rgType && rgType !== 'album' && rgType !== 'ep') return false;
+
         const rgArtistMain = rg['artist-credit']?.[0]?.name || "";
-        const normInput = normalizeForComparison(artist);
-        const normRgMain = normalizeForComparison(rgArtistMain);
-        
+
         const titleSim = stringSimilarity(cleanedAlbum, rg.title);
         const artistSim = stringSimilarity(artist, rgArtistMain);
 
-        const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, cleanedAlbum.toLowerCase(), titleSim);
+        const combinedSim = titleSim * 0.7 + artistSim * 0.3;
+        if (combinedSim < 0.75) return false;
+
+        const allArtists = (rg['artist-credit'] || [])
+          .map(a => normalizeForComparison(a.name || ""));
+
+        const normInput = normalizeForComparison(artist);
+        const normRgMain = normalizeForComparison(rgArtistMain);
+
+        const artistMatch = validateArtistMatch(
+          normInput,
+          normRgMain,
+          allArtists,
+          artistSim,
+          cleanedAlbum.toLowerCase(),
+          titleSim
+        );
         if (!artistMatch) return false;
 
         const minTitleSim = (artistSim > 0.95) ? 0.5 : 0.65;
         if (titleSim < minTitleSim) return false;
 
         return true;
-      })
+            })
+
       .map(rg => {
         const year = parseInt(rg['first-release-date']?.split('-')[0] || "0", 10);
         const primaryType = rg['primary-type']?.toLowerCase() || null;
@@ -756,14 +768,29 @@ async function getMusicBrainzData(artist, album) {
         const normTitleMB = normalizeForComparison(rg.title);
         const normTitleSearch = normalizeForComparison(cleanedAlbum);
 
-        const artistSimilarity = stringSimilarity(artist, rgArtist);
+        const mbArtist = rg['artist-credit']?.[0]?.name || "";
+
+        const artistSimilarity = stringSimilarity(artist, mbArtist);
         const titleSimilarity = stringSimilarity(cleanedAlbum, rg.title);
-        
+
+        const baseSimilarityScore =
+          titleSimilarity * 0.7 +
+          artistSimilarity * 0.3;
+
         const score = calculateMatchScore(
-          artistSimilarity, titleSimilarity, cleanedAlbum, rg.title,
-          normInput, normRg, normTitleMB, normTitleSearch,
-          cleanedAlbum.toLowerCase(), primaryType, secondaryTypes
-        );
+          artistSimilarity,
+          titleSimilarity,
+          cleanedAlbum,
+          rg.title,
+          normInput,
+          normRg,
+          normTitleMB,
+          normTitleSearch,
+          cleanedAlbum.toLowerCase(),
+          primaryType,
+          secondaryTypes
+        ) + (baseSimilarityScore * 200); // boost good combined matches
+
 
         return { ...rg, score, year, rgArtist };
       })
@@ -777,7 +804,7 @@ async function getMusicBrainzData(artist, album) {
       return yearA - yearB;
     });
 
-    if (candidates.length > 0 && candidates[0].score > 200) {
+    if (candidates.length > 0 && candidates[0].score > 800) {
       const best = candidates[0];
       const result = {
         musicbrainz_id: best.id,
