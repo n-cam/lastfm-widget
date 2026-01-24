@@ -752,7 +752,14 @@ async function getMusicBrainzData(artist, album) {
 
         return { ...rg, score, year, rgArtist };
       })
-      .sort((a, b) => b.score - a.score); // Simplified sort
+      .sort((a, b) => {
+      // 1. Primary sort: Score (Descending)
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      // 2. Secondary sort: Year (Ascending/Oldest first)
+      return (a.year || 9999) - (b.year || 9999);
+    });
 
     if (candidates.length > 0 && candidates[0].score > 200) {
       const best = candidates[0];
