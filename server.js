@@ -286,6 +286,64 @@ initDatabase().then(async () => {
   }
 });
 
+// ============================================
+// CENTRALIZED LAST.FM API CALLER
+// ============================================
+async function callLastFmAPI(method, params = {}, retries = 3) {
+  const url = new URL('https://ws.audioscrobbler.com/2.0/');
+  url.searchParams.set('method', method);
+  url.searchParams.set('api_key', process.env.LASTFM_API_KEY);
+  url.searchParams.set('format', 'json');
+  
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    
+    try {
+      const response = await fetch(url.toString(), { 
+        signal: controller.signal,
+        headers: { 'User-Agent': 'LastFmTopAlbums/1.0.0' }
+      });
+      
+      clearTimeout(timeout);
+      
+      if (response.status === 429) {
+        const waitTime = Math.pow(2, attempt) * 1000;
+        console.log(`⏳ Last.fm rate limit, waiting ${waitTime/1000}s...`);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+      
+      if (response.status === 503 && attempt < retries - 1) {
+        const waitTime = Math.pow(2, attempt) * 1000;
+        console.log(`⏳ Last.fm unavailable, retry in ${waitTime/1000}s...`);
+        await new Promise(r => setTimeout(r, waitTime));
+        continue;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`Last.fm API error: ${response.status}`);
+      }
+      
+      return await response.json();
+      
+    } catch (err) {
+      clearTimeout(timeout);
+      
+      if (attempt === retries - 1) {
+        throw new Error(`Last.fm API failed after ${retries} attempts: ${err.message}`);
+      }
+      
+      const waitTime = Math.pow(2, attempt) * 1000;
+      await new Promise(r => setTimeout(r, waitTime));
+    }
+  }
+}
+
 const cron = require('node-cron');
 
 cron.schedule('0 3 * * 0', async () => {
@@ -314,38 +372,54 @@ function cleanArtistName(name) {
 function cleanAlbumName(name) {
   if (!name) return "";
 
-  // 1. Remove specific years followed by "Remaster" (e.g., "2009 Remaster", "1994 Remastered")
+  // 1. Remove specific years followed by "Remaster" (e.g., "2009 Remaster")
   const yearRemasterRegex = /\s*[\(\[]?\d{4}\s+Remaster(?:ed)?[\)\]]?/gi;
 
-  // 2. Comprehensive list of "noise" tags found in brackets or after dashes
+  // 2. Terms that are strictly "noise" when found in brackets or after separators
   const noiseTerms = [
     'Deluxe', 'Remastered', 'Remaster', 'Edition', 'Anniversary', 
     'Expanded', 'Special', 'Bonus', 'Live', 'Explicit', 'Extended', 
     'Target', 'Walmart', 'Japan', 'Import', 'Clean', 'Dirty', 
     'Digital', 'LP', 'Version', 'Set', 'Box Set', 'Mono', 'Stereo',
-    'Reissue', 'Collector\'s', 'Standard', 'Super Deluxe'
+    'Reissue', 'Collector\'s', 'Standard', 'Super Deluxe',
+    'Vol\\.?', 'Volume', 'Pt\\.?', 'Part',
+    'Refill', 'Reloaded', 'Unlocked', 'Platinum', 'Legacy', 'Diamond'
   ].join('|');
 
-  const bracketRegex = new RegExp(`\\s*[\\(\\[](?:${noiseTerms})[\\)\\]]`, 'gi');
-  const dashRegex = new RegExp(`\\s*-\\s*(?:${noiseTerms}).*`, 'gi');
+  // SAFE: Remove noise inside brackets/parentheses
+  // Matches: (Deluxe), [Remastered], (Expanded Edition)
+  const bracketRegex = new RegExp(`\\s*[\\(\\[](?:${noiseTerms})[^\\)\\]]*[\\)\\]]`, 'gi');
+
+  // SAFE: Remove noise after specific separators (Dash or Colon)
+  // Matches: " - Remastered", " : Deluxe Edition"
+  // Also matches: "Relapse: Refill", "SOS Deluxe: LANA" (because of the colon)
+  const separatorRegex = new RegExp(`\\s*(?:-|:)\\s*(?:.*(?:${noiseTerms})).*`, 'gi');
+
+  // SAFE: Remove specific multi-word phrases at the end of the string
+  // We DO NOT remove just "Deluxe" to protect "Love Deluxe".
+  // We ONLY remove "Deluxe Edition", "Deluxe Version", "Expanded Edition", etc.
+  const phraseRegex = /\s+(?:Deluxe|Expanded|Special|Standard|Bonus)\s+(?:Edition|Version|Cut|Tracks).*$/i;
+
+  // SPECIFIC FIX: Handle "SOS Deluxe: LANA" pattern where 'Deluxe' precedes the colon
+  // Matches " Deluxe: ..." and removes it.
+  // "Love Deluxe" (no colon) is SAFE. "SOS Deluxe: LANA" (has colon) is CLEANED.
+  const deluxeColonRegex = /\s+Deluxe\s*:.*$/i;
 
   let cleaned = name;
   let prev;
 
   do {
     prev = cleaned;
-    
-    // Apply all cleaning rules
     cleaned = cleaned
-      .replace(yearRemasterRegex, '') // Remove "2009 Remaster"
-      .replace(bracketRegex, '')      // Remove "(Deluxe Edition)"
-      .replace(dashRegex, '')         // Remove "- Remastered"
-      .replace(/\s+\(?(?:Mono|Stereo|Remaster(?:ed)?)\)?$/i, '') // Catch dangling terms
+      .replace(yearRemasterRegex, '')
+      .replace(bracketRegex, '')
+      .replace(separatorRegex, '')
+      .replace(phraseRegex, '')
+      .replace(deluxeColonRegex, '')
+      .replace(/\s+\(?(?:Mono|Stereo|Remaster(?:ed)?)\)?$/i, '') // Catch dangling stragglers
       .trim();
-      
-  } while (cleaned !== prev); // Loop to catch nested tags like (Live) [Remaster]
+  } while (cleaned !== prev);
 
-  // Final safety: if cleaning leaves us with an empty string (rare), return original
   return cleaned || name;
 }
 
@@ -420,38 +494,47 @@ function toTitleCase(str) {
 function buildSearchQueries(artist, album) {
   const queries = [];
   
-  // Query 1: Most specific - exact artist + album
-  queries.push(`releasegroup:"${album}" AND artist:"${artist}"`);
-  
-  // Query 2: Try without honorifics (Ms., Mr., Dr.)
-  const artistNoHonorific = artist.replace(/^(Ms\.?|Mr\.?|Dr\.?)\s+/i, '');
-  if (artistNoHonorific !== artist) {
-    queries.push(`releasegroup:"${album}" AND artist:"${artistNoHonorific}"`);
+  const cleanA = artist.replace(/"/g, '');
+  const cleanT = album.replace(/"/g, '');
+
+  // 1. Strict Exact Match (Best for accuracy)
+  queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA}"`);
+
+  // 2. SHORT TITLE FIX (Fixes Ed Sheeran "X", Adele "21")
+  // If title is 2 chars or less, FORCE strict title matching to avoid noise
+  if (cleanT.length <= 2) {
+     queries.push(`releasegroup:"${cleanT}" AND artist:(${cleanA})`);
+     return queries; // Stop here for short titles to prevent bad matches
   }
   
-  // Query 3: Try without special characters in album title
-  const albumNoSpecial = album.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (albumNoSpecial !== album && albumNoSpecial.length > 0) {
-    queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artist}"`);
+  // 3. Strip "The" from Artist (Fixes 'The High Llamas')
+  if (cleanA.toLowerCase().startsWith('the ')) {
+    queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA.substring(4)}"`);
   }
-  
-  // Query 4: Combine both (no honorific + no special chars)
-  if (artistNoHonorific !== artist && albumNoSpecial !== album) {
-    queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artistNoHonorific}"`);
+
+  // 4. "Split" Artist Search (Fixes "Elvis Costello & The Attractions")
+  // Searches for just "Elvis Costello" if the full band search fails
+  const splitTerms = [' & ', ' x ', ' feat ', ' ft ', ' with '];
+  for (const term of splitTerms) {
+    if (cleanA.toLowerCase().includes(term)) {
+        const primaryArtist = cleanA.split(new RegExp(term, 'i'))[0];
+        if (primaryArtist.length > 2) {
+            queries.push(`releasegroup:"${cleanT}" AND artist:"${primaryArtist}"`);
+        }
+    }
   }
+
+  // 5. Loose/Fuzzy Search (Fixes punctuation issues like Mama's Gun)
+  queries.push(`releasegroup:(${cleanT}) AND artist:(${cleanA})`);
+
+  // 6. Super Loose (Remove special chars)
+  const albumNoSpecial = cleanT.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const artistNoSpecial = cleanA.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   
-  // Query 5: For very short titles, use release search
-  if (album.length <= 3) {
-    queries.push(`release:"${album}" AND artist:"${artist}"`);
+  if (albumNoSpecial !== cleanT || artistNoSpecial !== cleanA) {
+    queries.push(`releasegroup:"${albumNoSpecial}" AND artist:"${artistNoSpecial}"`);
   }
-  
-  // Query 6: For Broadway/soundtracks, try broader artist search
-  if (album.toLowerCase().includes('broadway') || 
-      album.toLowerCase().includes('soundtrack') ||
-      album.toLowerCase().includes('original cast')) {
-    queries.push(`releasegroup:"${album}"`);
-  }
-  
+
   return queries;
 }
 
@@ -506,49 +589,63 @@ function calculateMatchScore(
   primaryType,
   secondaryTypes
 ) {
-  // High artist weight but not extreme
+  // Base Score
   let score = (artistSimilarity * 500) + (titleSimilarity * 500);
 
   // Severe penalty for artist mismatch
   if (artistSimilarity < 0.75) score -= 1500;
   
-  // VETO: Wrong core title
-  const coreSearchTitle = cleanedAlbum.split(/[(\-:]/)[0].trim().toLowerCase();
-  const coreRgTitle = rgTitle.split(/[(\-:]/)[0].trim().toLowerCase();
-  if (!coreRgTitle.includes(coreSearchTitle) && !coreSearchTitle.includes(coreRgTitle)) {
+  // ---------------------------------------------------------
+  // IMPROVED CORE TITLE CHECK (Punctuation Agnostic)
+  // ---------------------------------------------------------
+  // We strip ALL non-alphanumeric chars before checking inclusion.
+  // This ensures "Mama's Gun" matches "Mamas Gun"
+  const coreSearchToken = cleanedAlbum.split(/[(\-:]/)[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  const coreRgToken = rgTitle.split(/[(\-:]/)[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  if (!coreRgToken.includes(coreSearchToken) && !coreSearchToken.includes(coreRgToken)) {
     score -= 1000; 
   }
 
   // MASSIVE BONUS: Exact title match
   if (normTitleMB === normTitleSearch) score += 1000;
 
-  // VETO: Singles and EPs unless exact title match
+  // Type Logic
   if (primaryType === 'single' && normTitleMB !== normTitleSearch) score -= 1500;
   if (primaryType === 'ep' && normTitleMB !== normTitleSearch) score -= 800;
-
-  // PREFER: Albums over everything
   if (primaryType === 'album') score += 500;
   if (primaryType === 'album' && secondaryTypes.length === 0) score += 300;
 
-  // Word Count Penalty (verbose titles)
+  // Word Count Penalty
   const searchWords = normTitleSearch.split(' ').length;
   const mbWords = normTitleMB.split(' ').length;
   if (mbWords > searchWords + 2) score -= 600;
 
-  // VETO: Quality issues
-  const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'covers of', 'sampler', 'samples', 'mixtape', 'liners'];
+  // Budget Keywords
+  const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'covers of'];
   if (budgetKeywords.some(word => normTitleMB.includes(word))) score -= 1500;
 
+  // ---------------------------------------------------------
+  // IMPROVED BAD TYPE LOGIC (Allow Compilations if Exact Match)
+  // ---------------------------------------------------------
   const badTypes = ['live', 'demo', 'remix', 'dj-mix', 'compilation'];
+  
+  // Only penalize compilation if the title isn't an exact match
+  const isExactMatch = normTitleMB === normTitleSearch;
+  
   if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) {
-    score -= 800;
+    if (secondaryTypes.includes('compilation') && isExactMatch) {
+       // Do not penalize exact match compilations
+    } else {
+       score -= 800;
+    }
   }
 
   // Length penalty
-  if (rgTitle.length > cleanedAlbum.length + 10) score -= 500;
+  if (rgTitle.length > cleanedAlbum.length + 12) score -= 500;
   
   // Artist bonuses
-  if (normRg === normInput) score += 500; // Exact artist match
+  if (normRg === normInput) score += 500; 
   else if (normRg.includes(normInput) || normInput.includes(normRg)) score += 200;
 
   return score;
@@ -560,9 +657,11 @@ async function getMusicBrainzData(artist, album) {
   const cacheKey = `${normalizeForComparison(cleanedArtist)}::${normalizeForComparison(cleanedAlbum)}`;
   
   if (mbGlobalCache.has(cacheKey)) return mbGlobalCache.get(cacheKey);
+  
+  // REDUCED CACHE FAILURE TIME: 24h -> 1h (easier for debugging/retries)
   if (mbFailureCache.has(cacheKey)) {
     const failTime = mbFailureCache.get(cacheKey);
-    if (Date.now() - failTime < 24 * 60 * 60 * 1000) {
+    if (Date.now() - failTime < 60 * 60 * 1000) { 
       return { 
         canonical_name: toTitleCase(cleanedAlbum), 
         canonical_artist: toTitleCase(cleanedArtist), 
@@ -573,47 +672,43 @@ async function getMusicBrainzData(artist, album) {
     }
   }
 
-  const DEBUG = false; // TEMPORARILY ENABLED for testing
-  if (DEBUG) console.log(`\n🔍 Searching for: "${cleanedAlbum}" by "${cleanedArtist}"`);
-
   try {
     const queries = buildSearchQueries(cleanedArtist, cleanedAlbum);
     
     let allCandidates = [];
     for (const queryString of queries) {
       const query = encodeURIComponent(queryString);
-      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=15`;
-      
-      if (DEBUG) console.log(`  📡 Query: ${queryString}`);
+      // INCREASED LIMIT 15 -> 25
+      const mbUrl = `https://musicbrainz.org/ws/2/release-group/?query=${query}&fmt=json&limit=25`; 
       
       await new Promise(resolve => setTimeout(resolve, 1100)); 
+      
       const response = await fetch(mbUrl, {
         headers: { 'User-Agent': `LastFmTopAlbums/1.0.0 ( ${process.env.YOUR_EMAIL || 'contact@example.com'} )` }
       });
       
-      if (!response.ok) {
-        if (DEBUG) console.log(`  ❌ Query failed: ${response.status}`);
-        continue;
-      }
+      if (!response.ok) continue;
       
       const data = await response.json();
       if (data['release-groups'] && data['release-groups'].length > 0) {
-        if (DEBUG) console.log(`  ✓ Found ${data['release-groups'].length} candidates`);
         allCandidates.push(...data['release-groups']);
+        // If we found a perfect score, we can stop querying
         if (data['release-groups'][0].score === 100) break;
-        if (allCandidates.length >= 25) break;
+        if (allCandidates.length >= 40) break;
       }
     }
     
-    if (allCandidates.length === 0) {
-      if (DEBUG) console.log(`  ❌ No candidates found`);
-      throw new Error("No candidates found");
-    }
+    if (allCandidates.length === 0) throw new Error("No candidates found");
     
     const uniqueCandidates = Array.from(new Map(allCandidates.map(rg => [rg.id, rg])).values());
 
     const candidates = uniqueCandidates
       .filter(rg => {
+        // [Keep your existing filter logic here, it is fine with the updated scoring]
+        // Just make sure to use the new calculateMatchScore function
+        
+        // ... (copy your existing filter block or paste the full function if needed)
+        // Ensure you check rg['first-release-date'] exists
         if (!rg['first-release-date']) return false;
 
         const allArtists = (rg['artist-credit'] || []).map(a => normalizeForComparison(a.name || ""));
@@ -624,37 +719,12 @@ async function getMusicBrainzData(artist, album) {
         const titleSim = stringSimilarity(cleanedAlbum, rg.title);
         const artistSim = stringSimilarity(artist, rgArtistMain);
 
-        // STRICT ARTIST VALIDATION
         const artistMatch = validateArtistMatch(normInput, normRgMain, allArtists, artistSim, cleanedAlbum.toLowerCase(), titleSim);
-        if (!artistMatch) {
-          if (DEBUG) console.log(`  ❌ "${rg.title}" by "${rgArtistMain}" - artist fail (${artistSim.toFixed(2)})`);
-          return false;
-        }
+        if (!artistMatch) return false;
 
-        // STRICT TITLE THRESHOLD - but allow lower if artist is perfect match
         const minTitleSim = (artistSim > 0.95) ? 0.5 : 0.65;
-        if (titleSim < minTitleSim) {
-          if (DEBUG) console.log(`  ❌ "${rg.title}" - title too different (${titleSim.toFixed(2)}, need ${minTitleSim})`);
-          return false;
-        }
+        if (titleSim < minTitleSim) return false;
 
-        // Short title protection
-        const normTitleMB = normalizeForComparison(rg.title);
-        const normTitleSearch = normalizeForComparison(cleanedAlbum);
-        if (cleanedAlbum.length <= 3 && normTitleMB !== normTitleSearch) return false;
-
-        // Live/Remix rejection
-        const secondaryTypes = (rg['secondary-types'] || []).map(t => t.toLowerCase());
-        const searchTitleLower = cleanedAlbum.toLowerCase();
-        
-        const isLive = secondaryTypes.includes('live');
-        const userWantsLive = ['live', 'session', 'unplugged', 'concert'].some(w => searchTitleLower.includes(w));
-        if (isLive && !userWantsLive) return false;
-
-        const isRemix = secondaryTypes.includes('remix') || rg.title.toLowerCase().includes('remix');
-        if (isRemix && !searchTitleLower.includes('remix')) return false;
-
-        if (DEBUG) console.log(`  ✓ "${rg.title}" by "${rgArtistMain}" (T:${titleSim.toFixed(2)} A:${artistSim.toFixed(2)})`);
         return true;
       })
       .map(rg => {
@@ -677,22 +747,12 @@ async function getMusicBrainzData(artist, album) {
           cleanedAlbum.toLowerCase(), primaryType, secondaryTypes
         );
 
-        if (DEBUG) console.log(`    Score: ${score} - "${rg.title}" (${year}) [${primaryType}]`);
         return { ...rg, score, year, rgArtist };
       })
-      .sort((a, b) => {
-        if (Math.abs(a.score - b.score) > 150) return b.score - a.score;
-        if (a.score > 800 && b.score > 800) return a.year - b.year;
-        return b.score - a.score;
-      });
+      .sort((a, b) => b.score - a.score); // Simplified sort
 
-    if (DEBUG && candidates.length > 0) {
-      console.log(`\n  🏆 Winner: "${candidates[0].title}" by "${candidates[0].rgArtist}" (${candidates[0].year}) - ${candidates[0].score}`);
-    }
-
-    if (candidates.length > 0 && candidates[0].score > 200) { // LOWERED from 400 for testing
+    if (candidates.length > 0 && candidates[0].score > 200) {
       const best = candidates[0];
-      if (DEBUG) console.log(`  ✅ ACCEPTING with score ${best.score}`);
       const result = {
         musicbrainz_id: best.id,
         release_year: best.year,
@@ -704,12 +764,7 @@ async function getMusicBrainzData(artist, album) {
       return result;
     }
     
-    if (DEBUG && candidates.length > 0) {
-      console.log(`  ❌ REJECTING - score too low: ${candidates[0].score} (need >200)`);
-    }
-    
     throw new Error(`No high-quality match (best score: ${candidates[0]?.score || 0})`);
-
 
   } catch (err) {
     console.error(`  ❌ MB Fail: "${cleanedAlbum}" by "${cleanedArtist}" - ${err.message}`);
@@ -753,53 +808,17 @@ async function performBackgroundUpdate(username, full, limit) {
 
     for (let page = 1; page <= pages; page++) {
       console.log(`\n📄 [${new Date().toISOString()}] BACKGROUND: Processing Page ${page}/${pages} for ${username}`);
-      const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
-      
       let pageData;
-      let retries = 0;
-      const maxRetries = 3;
-
-      while (retries < maxRetries) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        try {
-          const response = await fetch(lastfmUrl, { signal: controller.signal });
-
-          clearTimeout(timeout);
-
-          if (!response.ok) {
-            if ((response.status === 429 || response.status === 503) && retries < maxRetries - 1) {
-              const waitTime = Math.pow(2, retries) * 1000;
-              console.log(`  ⏳ Retry #${retries + 1} in ${waitTime/1000}s due to ${response.status}`);
-              await new Promise(r => setTimeout(r, waitTime));
-              retries++;
-              continue;
-            }
-            throw new Error(`Last.fm API error: ${response.status}`);
-          }
-
-          pageData = await response.json();
-          break;
-
-        } catch (err) {
-          clearTimeout(timeout);
-          if (err.name === 'AbortError') {
-            console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retries + 1}`);
-          } else {
-            console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
-          }
-
-          if (retries < maxRetries - 1) {
-            const waitTime = Math.pow(2, retries) * 1000;
-            await new Promise(r => setTimeout(r, waitTime));
-            retries++;
-          } else {
-            console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
-            pageData = null;
-            break;
-          }
-        }
-      }
+    try {
+      pageData = await callLastFmAPI('user.gettopalbums', {
+        user: username,
+        limit: perPage,
+        page: page
+      });
+    } catch (err) {
+      console.error(`  ❌ Failed to fetch page ${page}:`, err.message);
+      break;
+    }
 
       if (!pageData || !pageData.topalbums || !pageData.topalbums.album) {
         console.log("  ⚠️ No more albums found or failed to fetch page."); 
@@ -970,27 +989,20 @@ async function performProgressiveScan(jobId) {
         return;
       }
       
-      const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
-      
       let pageData;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      
-      try {
-        const response = await fetch(lastfmUrl, { signal: controller.signal });
-        clearTimeout(timeout);
-        
-        if (!response.ok) throw new Error(`Last.fm API error: ${response.status}`);
-        
-        pageData = await response.json();
-      } catch (err) {
-        clearTimeout(timeout);
-        updateJobProgress(jobId, { 
-          status: 'error',
-          error: `Failed to fetch page ${page}: ${err.message}`
-        });
-        return;
-      }
+    try {
+      pageData = await callLastFmAPI('user.gettopalbums', {
+        user: username,
+        limit: perPage,
+        page: page
+      });
+    } catch (err) {
+      updateJobProgress(jobId, { 
+        status: 'error',
+        error: `Failed to fetch page ${page}: ${err.message}`
+      });
+      return;
+    }
       
       if (!pageData.topalbums || !pageData.topalbums.album) break;
       
@@ -1234,58 +1246,30 @@ app.get('/api/top-albums', async (req, res) => {
       let allAlbums = [];
       
       for (let page = 1; page <= pagesToFetch; page++) {
-        const lastfmUrl = `https://ws.audioscrobbler.com/2.0/?method=user.gettopalbums&user=${username}&api_key=${process.env.LASTFM_API_KEY}&format=json&limit=${perPage}&page=${page}`;
-        
-        let retryCount = 0;
-        const maxRetries = 3;
         let pageSuccess = false;
-        
-        while (retryCount < maxRetries && !pageSuccess) {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 10000);
-          try {
-            const response = await fetch(lastfmUrl, { signal: controller.signal });
+        let pageData;
 
-            clearTimeout(timeout);
-
-            if (!response.ok) {
-              if ((response.status === 429 || response.status === 503) && retryCount < maxRetries - 1) {
-                const waitTime = Math.pow(2, retryCount) * 1000;
-                console.log(`  ⏳ Retrying in ${waitTime/1000}s due to ${response.status}`);
-                await new Promise(r => setTimeout(r, waitTime));
-                retryCount++;
-                continue;
-              }
-              throw new Error(`Last.fm API error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            allAlbums.push(...(Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album]));
-            
-            console.log(`    ✓ Page ${page}: ${(Array.isArray(data.topalbums.album) ? data.topalbums.album.length : 1)} albums (total: ${allAlbums.length})`);
-
-            pageSuccess = true;
-
-            if (!data.topalbums.album || (Array.isArray(data.topalbums.album) && data.topalbums.album.length < perPage)) break;
-
-          } catch (err) {
-            clearTimeout(timeout);
-            if (err.name === 'AbortError') {
-              console.warn(`  ⚠️ Fetch timeout on page ${page}, retry #${retryCount + 1}`);
-            } else {
-              console.error(`  ⚠️ Fetch error on page ${page}:`, err.message);
-            }
-
-            if (retryCount < maxRetries - 1) {
-              const waitTime = Math.pow(2, retryCount) * 1000;
-              await new Promise(r => setTimeout(r, waitTime));
-              retryCount++;
-            } else {
-              console.error(`  ❌ Failed to fetch page ${page} after ${maxRetries} attempts, skipping.`);
-              pageSuccess = true;
-            }
-          }
+        try {
+          pageData = await callLastFmAPI('user.gettopalbums', {
+            user: username,
+            limit: perPage,
+            page: page
+          });
+          pageSuccess = true;
+        } catch (err) {
+          console.error(`  ❌ Failed to fetch page ${page}:`, err.message);
+          if (allAlbums.length === 0) break;
         }
+
+        if (pageSuccess) {
+          const data = pageData; // keep your existing variable name
+          allAlbums.push(...(Array.isArray(data.topalbums.album) ? data.topalbums.album : [data.topalbums.album]));
+
+          console.log(`    ✓ Page ${page}: ${(Array.isArray(data.topalbums.album) ? data.topalbums.album.length : 1)} albums (total: ${allAlbums.length})`);
+
+          if (!data.topalbums.album || (Array.isArray(data.topalbums.album) && data.topalbums.album.length < perPage)) break;
+        }
+
         
         if (!pageSuccess && allAlbums.length === 0) break;
         if (page < pagesToFetch && pageSuccess) {
