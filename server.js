@@ -355,7 +355,7 @@ cron.schedule('0 3 * * 0', async () => {
   for (const user of CACHED_USERS) {
     try {
       console.log(`  [${new Date().toISOString()}] Updating ${user}...`);
-      await performBackgroundUpdate(user, false, 500);
+      await performBackgroundUpdate(user, false, 2000);
       await new Promise(r => setTimeout(r, 60000));
     } catch (err) {
       console.error(`  [${new Date().toISOString()}] ❌ Failed to update ${user}:`, err);
@@ -561,8 +561,8 @@ function buildSearchQueries(artist, album) {
     queries.push(`releasegroup:"${cleanT}" AND artist:"${cleanA.substring(4)}"`);
   }
 
-  // 8. Split artist collabs
-  const splitTerms = [' & ', ' x ', ' feat ', ' ft ', ' with '];
+  // 8. Split artist collabs (expanded)
+  const splitTerms = [' & ', ' x ', ' and ', ' feat ', ' ft ', ' with ', ', '];
   for (const term of splitTerms) {
     if (cleanA.toLowerCase().includes(term)) {
       const primary = cleanA.split(new RegExp(term, 'i'))[0].trim();
@@ -667,16 +667,22 @@ function calculateMatchScore(
   if (normTitleMB === normTitleSearch) score += 1000;
 
   // Type Logic
-  // Smarter EP handling - strip " - EP" suffix before comparing
-  const searchWithoutEP = normTitleSearch.replace(/\s*ep$/i, '').trim();
-  const mbWithoutEP = normTitleMB.replace(/\s*ep$/i, '').trim();
+  // Type-based scoring improvements
+  const searchWithoutSuffix = normTitleSearch.replace(/\s*(ep|single)$/i, '').trim();
+  const mbWithoutSuffix = normTitleMB.replace(/\s*(ep|single)$/i, '').trim();
 
-  if (primaryType === 'ep' && searchWithoutEP !== mbWithoutEP) {
-    score -= 500; // Reduced penalty since we stripped suffix
+  // Prefer albums over EPs/singles when names match
+  if (primaryType === 'album') {
+    score += 500;
+    if (secondaryTypes.length === 0) score += 300; // Pure album bonus
+  } else if (primaryType === 'ep') {
+    score += 100; // Small bonus for EP
+    if (searchWithoutSuffix !== mbWithoutSuffix) score -= 300; // Reduced penalty
   }
-  if (primaryType === 'single' && normTitleMB !== normTitleSearch) score -= 1500;
-  if (primaryType === 'album') score += 500;
-  if (primaryType === 'album' && secondaryTypes.length === 0) score += 300;
+  
+  // Only penalize singles if title doesn't match (even without suffix)
+  if (primaryType === 'single' && searchWithoutSuffix !== mbWithoutSuffix) {
+    score -= 1200; // Reduced from 1500
 
   // Word Count Penalty
   const searchWords = normTitleSearch.split(' ').length;
@@ -818,8 +824,12 @@ async function getMusicBrainzData(artist, album) {
       return yearA - yearB;
     });
 
-    // ⚠️ FIXED: Raised threshold to 800 (was 600 in suggestion)
-    if (scored.length > 0 && scored[0].score > 800) {
+    // ✅ Dynamic threshold based on release type
+    const minScore = scored[0]?.['primary-type']?.toLowerCase() === 'album' ? 600 : 
+                     scored[0]?.['primary-type']?.toLowerCase() === 'ep' ? 650 : 
+                     800; // Singles require exact match
+    
+    if (scored.length > 0 && scored[0].score > minScore) {
       const best = scored[0];
       const result = {
         musicbrainz_id: best.id,
