@@ -1,20 +1,20 @@
 require('dotenv').config();
 const express = require('express');
-const path = require('path'); // Added this
+const path = require('path');
 const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'aoty-widget.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/aoty-widget.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'aoty-widget.html'));
+  res.sendFile(path.join(__dirname, 'public', 'aoty-widget.html'));
 });
 
 app.set('trust proxy', 1);
