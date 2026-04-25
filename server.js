@@ -1,13 +1,25 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path'); // Added this
 const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
+
 const app = express();
-app.use(express.static(__dirname));
-app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
+
+app.use(express.static(__dirname));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'aoty-widget.html'));
+});
+
+app.get('/aoty-widget.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'aoty-widget.html'));
+});
+
+app.set('trust proxy', 1);
 const AbortController = require('abort-controller');
-const { v4: uuidv4 } = require('uuid'); // Add this to dependencies
+const { v4: uuidv4 } = require('uuid');
 
 // ==========================================
 // 🚀 SHORT-TERM REQUEST CACHE
