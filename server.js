@@ -1856,45 +1856,30 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
       }
     }
     
-    res.json({
+ res.json({
       success: true,
       merged: mergedCount,
       message: `Merged ${mergedCount} duplicate albums`
-});
+    });
   } catch (err) {
     console.error('Merge error:', err);
     res.status(500).json({ error: err.message });
   }
-});
+}); // This closes the merge-duplicates tool
 
 // ==========================================
 // 🚀 FINAL SERVER STARTUP (RENDER SAFE)
 // ==========================================
 const RENDER_PORT = process.env.PORT || 10000;
 
-// 1. Instantly open the port to satisfy Render's health check
-const server = app.listen(RENDER_PORT, '0.0.0.0', () => {
+app.listen(RENDER_PORT, '0.0.0.0', () => {
   console.log(`\n🎵 Last.fm API Server is LIVE`);
   console.log(`📍 Port: ${RENDER_PORT} is officially open`);
 });
 
-// Catch any hidden port errors
-server.on('error', (err) => {
-  console.error('❌ Express Server Error:', err);
-});
-
-// 2. Load the database in the background
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
-  console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
-  if (dbType === 'postgres') {
-    try {
-      const count = await dbGet('SELECT COUNT(*) as count FROM albums_global');
-      console.log(`📊 Total albums in global cache: ${count.count}`);
-    } catch (e) {
-      console.log('Could not fetch initial stats');
-    }
-  }
 }).catch(err => {
   console.error('❌ Failed to initialize database:', err);
 });
+}
