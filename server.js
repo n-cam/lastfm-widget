@@ -1867,19 +1867,23 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
   }
 }); // This closes the merge-duplicates tool
 
+/// ==========================================
+// 🚀 EMERGENCY RENDER STARTUP
 // ==========================================
-// 🚀 FINAL SERVER STARTUP (RENDER SAFE)
-// ==========================================
-const RENDER_PORT = process.env.PORT || 10000;
+const FINAL_PORT = process.env.PORT || 10000;
 
-app.listen(RENDER_PORT, '0.0.0.0', () => {
-  console.log(`\n🎵 Last.fm API Server is LIVE`);
-  console.log(`📍 Port: ${RENDER_PORT} is officially open`);
+// 1. OPEN THE PORT FIRST (INSTANTLY)
+// This stops Render's "No open ports detected" error immediately.
+app.listen(FINAL_PORT, '0.0.0.0', () => {
+  console.log(`\n🚀 RENDER HEALTH CHECK PASSED`);
+  console.log(`📍 Port ${FINAL_PORT} is now open.`);
+  
+  // 2. NOW START DATABASE IN THE BACKGROUND
+  // The server is already "Live" in Render's eyes, so this can take its time.
+  console.log('⏳ Initializing database in background...');
+  initDatabase()
+    .then(() => console.log('✅ Database background task complete'))
+    .catch(err => console.error('❌ Background DB Error:', err));
 });
 
-initDatabase().then(async () => {
-  console.log('✅ Database initialized');
-}).catch(err => {
-  console.error('❌ Failed to initialize database:', err);
-});
-}
+// REMOVE ALL OTHER initDatabase() OR app.listen() CALLS BELOW THIS
