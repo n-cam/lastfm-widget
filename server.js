@@ -1895,10 +1895,12 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
 initDatabase().then(async () => {
   console.log('✅ Database initialized');
 
+  const actualPort = process.env.PORT || 10000;
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🎵 Last.fm Top Albums API Server`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(`\n📍 Server: http://0.0.0.0:${PORT}`);
+    console.log(`📍 Server: http://0.0.0.0:${actualPort}`);
     console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
     console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
     console.log(`🔴 Public users: real-time mode\n`);
