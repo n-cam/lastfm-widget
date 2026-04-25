@@ -681,7 +681,8 @@ function calculateMatchScore(
   
   // Only penalize singles if title doesn't match (even without suffix)
   if (primaryType === 'single' && searchWithoutSuffix !== mbWithoutSuffix) {
-    score -= 1200; // Reduced from 1500
+    score -= 1200;
+  }
 
   // Word Count Penalty
   const searchWords = normTitleSearch.split(' ').length;
@@ -692,19 +693,15 @@ function calculateMatchScore(
   const budgetKeywords = ['tribute', 'karaoke', 'instrumental', 'version of', 'covers of'];
   if (budgetKeywords.some(word => normTitleMB.includes(word))) score -= 1500;
 
-  // ---------------------------------------------------------
-  // IMPROVED BAD TYPE LOGIC (Allow Compilations if Exact Match)
-  // ---------------------------------------------------------
+  // Bad type logic
   const badTypes = ['live', 'demo', 'remix', 'dj-mix', 'compilation'];
-  
-  // Only penalize compilation if the title isn't an exact match
   const isExactMatch = normTitleMB === normTitleSearch;
   
   if (secondaryTypes.some(t => badTypes.includes(t)) && !badTypes.some(t => normTitleSearch.includes(t))) {
     if (secondaryTypes.includes('compilation') && isExactMatch) {
-       // Do not penalize exact match compilations
+      // Do not penalize exact match compilations
     } else {
-       score -= 800;
+      score -= 800;
     }
   }
 
@@ -1865,25 +1862,17 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
     console.error('Merge error:', err);
     res.status(500).json({ error: err.message });
   }
-}); // This closes the merge-duplicates tool
-
-/// ==========================================
-// 🚀 EMERGENCY RENDER STARTUP
-// ==========================================
-const FINAL_PORT = process.env.PORT || 10000;
-
-// 1. OPEN THE PORT FIRST (INSTANTLY)
-// This stops Render's "No open ports detected" error immediately.
-app.listen(FINAL_PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 RENDER HEALTH CHECK PASSED`);
-  console.log(`📍 Port ${FINAL_PORT} is now open.`);
-  
-  // 2. NOW START DATABASE IN THE BACKGROUND
-  // The server is already "Live" in Render's eyes, so this can take its time.
-  console.log('⏳ Initializing database in background...');
-  initDatabase()
-    .then(() => console.log('✅ Database background task complete'))
-    .catch(err => console.error('❌ Background DB Error:', err));
 });
 
-// REMOVE ALL OTHER initDatabase() OR app.listen() CALLS BELOW THIS
+initDatabase().then(() => {
+  const PORT = process.env.PORT || 10000;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🎵 Last.fm Top Albums API Server`);
+    console.log(`📍 Server: http://0.0.0.0:${PORT}`);
+    console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
+    console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
+  });
+}).catch(err => {
+  console.error('❌ Critical Startup Error:', err);
+  process.exit(1);
+});
