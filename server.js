@@ -1,9 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-app.use(express.static(__dirname));
 const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
 const app = express();
+app.use(express.static(__dirname));
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const AbortController = require('abort-controller');
