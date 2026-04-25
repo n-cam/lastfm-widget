@@ -1892,21 +1892,27 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🚀 SERVER STARTUP (RENDER SAFE)
+// ==========================================
+
+// 1. OPEN THE PORT IMMEDIATELY
+// This satisfies Render's timeout watcher instantly.
+const actualPort = process.env.PORT || 10000;
+
+app.listen(actualPort, '0.0.0.0', () => {
+  console.log(`\n🎵 Last.fm Top Albums API Server`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`📍 Server is LIVE on port: ${actualPort}`);
+  console.log(`⏳ Waiting for database to load in the background...`);
+});
+
+// 2. INITIALIZE DATABASE IN THE BACKGROUND
+// This can now take as long as it needs without crashing Render.
 initDatabase().then(async () => {
-  console.log('✅ Database initialized');
-
-  const actualPort = process.env.PORT || 10000;
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n🎵 Last.fm Top Albums API Server`);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(`📍 Server: http://0.0.0.0:${actualPort}`);
-    console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
-    console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
-    console.log(`🔴 Public users: real-time mode\n`);
-  });
-
+  console.log('✅ Database fully initialized');
+  console.log(`💾 Database: ${typeof dbType !== 'undefined' ? dbType : 'postgres'}`);
 }).catch(err => {
-  console.error("❌ Critical Startup Error:", err);
+  console.error("❌ Critical Database Error:", err);
 });
 }
