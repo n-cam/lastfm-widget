@@ -298,14 +298,7 @@ initDatabase().then(async () => {
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n🎵 Last.fm Top Albums API Server`);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(`\n📍 Server: http://0.0.0.0:${PORT}`);
-    console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
-    console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
-    console.log(`🔴 Public users: real-time mode\n`);
-  });
+  
 
 }).catch(err => {
   console.error('❌ Failed to initialize database:', err);
@@ -1892,10 +1885,26 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
       success: true,
       merged: mergedCount,
       message: `Merged ${mergedCount} duplicate albums`
-    });
+});
   } catch (err) {
     console.error('Merge error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+initDatabase().then(async () => {
+  console.log('✅ Database initialized');
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🎵 Last.fm Top Albums API Server`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`\n📍 Server: http://0.0.0.0:${PORT}`);
+    console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
+    console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
+    console.log(`🔴 Public users: real-time mode\n`);
+  });
+
+}).catch(err => {
+  console.error("❌ Critical Startup Error:", err);
 });
 }
