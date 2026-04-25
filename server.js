@@ -1882,3 +1882,4 @@ app.listen(PORT, () => {
   console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
   console.log(`🔴 Public users: real-time mode\n`);
 });
+}
