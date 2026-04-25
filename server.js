@@ -284,6 +284,18 @@ initDatabase().then(async () => {
       console.log('Could not fetch initial stats');
     }
   }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🎵 Last.fm Top Albums API Server`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`\n📍 Server: http://0.0.0.0:${PORT}`);
+    console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
+    console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
+    console.log(`🔴 Public users: real-time mode\n`);
+  });
+
+}).catch(err => {
+  console.error('❌ Failed to initialize database:', err);
 });
 
 // ============================================
@@ -349,8 +361,8 @@ async function callLastFmAPI(method, params = {}, retries = 3) {
 
 const cron = require('node-cron');
 
-cron.schedule('0 3 * * 0', async () => {
-  console.log('🔄 [' + new Date().toISOString() + '] Starting weekly auto-update...');
+cron.schedule('0 3 * * *', async () => {
+  console.log('🔄 [' + new Date().toISOString() + '] Starting daily auto-update...');
   
   for (const user of CACHED_USERS) {
     try {
@@ -365,7 +377,7 @@ cron.schedule('0 3 * * 0', async () => {
   console.log('✅ [' + new Date().toISOString() + '] Weekly auto-update complete');
 });
 
-console.log('⏰ Cron job scheduled: Weekly updates every Sunday at 3am');
+console.log('⏰ Cron job scheduled: Daily updates every Sunday at 3am');
 
 function cleanArtistName(name) {
   if (!name) return "";
@@ -1873,13 +1885,3 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-app.listen(PORT, () => {
-  console.log(`\n🎵 Last.fm Top Albums API Server`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`\n📍 Server: http://localhost:${PORT}`);
-  console.log(`💾 Database: ${dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
-  console.log(`💾 Cached users: ${CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none'}`);
-  console.log(`🔴 Public users: real-time mode\n`);
-});
-}
