@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+app.use(express.static(__dirname));
 const fetch = require('node-fetch');
 const rateLimit = require('express-rate-limit');
 const app = express();
