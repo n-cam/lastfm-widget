@@ -285,25 +285,6 @@ async function dbRun(query, params = []) {
   }
 }
 
-initDatabase().then(async () => {
-  console.log('✅ Database initialized');
-  console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
-
-  if (dbType === 'postgres') {
-    try {
-      const count = await dbGet('SELECT COUNT(*) as count FROM albums_global');
-      console.log(`📊 Total albums in global cache: ${count.count}`);
-    } catch (e) {
-      console.log('Could not fetch initial stats');
-    }
-  }
-
-  
-
-}).catch(err => {
-  console.error('❌ Failed to initialize database:', err);
-});
-
 // ============================================
 // CENTRALIZED LAST.FM API CALLER
 // ============================================
@@ -1245,8 +1226,6 @@ async function performProgressiveScan(jobId) {
   }
 }
 
-app.use(express.static('public'));
-
 app.use((req, res, next) => {
   const allowedOrigins = [
     'https://sortedsongs.com',
@@ -1291,10 +1270,6 @@ app.get('/health', (req, res) => {
      timestamp: new Date().toISOString(),
      uptime: process.uptime()
   });
-});
-
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/public/index.html');
 });
 
 function shouldUseCache(username) {
@@ -1893,26 +1868,33 @@ app.get('/api/admin/merge-duplicates', async (req, res) => {
 });
 
 // ==========================================
-// 🚀 SERVER STARTUP (RENDER SAFE)
+// 🚀 FINAL SERVER STARTUP (RENDER SAFE)
 // ==========================================
+const RENDER_PORT = process.env.PORT || 10000;
 
-// 1. OPEN THE PORT IMMEDIATELY
-// This satisfies Render's timeout watcher instantly.
-const actualPort = process.env.PORT || 10000;
-
-app.listen(actualPort, '0.0.0.0', () => {
-  console.log(`\n🎵 Last.fm Top Albums API Server`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`📍 Server is LIVE on port: ${actualPort}`);
-  console.log(`⏳ Waiting for database to load in the background...`);
+// 1. Instantly open the port to satisfy Render's health check
+const server = app.listen(RENDER_PORT, '0.0.0.0', () => {
+  console.log(`\n🎵 Last.fm API Server is LIVE`);
+  console.log(`📍 Port: ${RENDER_PORT} is officially open`);
 });
 
-// 2. INITIALIZE DATABASE IN THE BACKGROUND
-// This can now take as long as it needs without crashing Render.
+// Catch any hidden port errors
+server.on('error', (err) => {
+  console.error('❌ Express Server Error:', err);
+});
+
+// 2. Load the database in the background
 initDatabase().then(async () => {
-  console.log('✅ Database fully initialized');
-  console.log(`💾 Database: ${typeof dbType !== 'undefined' ? dbType : 'postgres'}`);
+  console.log('✅ Database initialized');
+  console.log('📋 Cached users:', CACHED_USERS.length > 0 ? CACHED_USERS.join(', ') : 'none');
+  if (dbType === 'postgres') {
+    try {
+      const count = await dbGet('SELECT COUNT(*) as count FROM albums_global');
+      console.log(`📊 Total albums in global cache: ${count.count}`);
+    } catch (e) {
+      console.log('Could not fetch initial stats');
+    }
+  }
 }).catch(err => {
-  console.error("❌ Critical Database Error:", err);
+  console.error('❌ Failed to initialize database:', err);
 });
-}
