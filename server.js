@@ -348,8 +348,8 @@ async function callLastFmAPI(method, params = {}, retries = 3) {
 
 const cron = require('node-cron');
 
-cron.schedule('0 3 * * *', async () => {
-  console.log('🔄 [' + new Date().toISOString() + '] Starting daily auto-update...');
+cron.schedule('0 8 * * *', async () => {
+  console.log('🔄 [' + new Date().toISOString() + '] Starting daily auto-update (3am EST)...');
   
   for (const user of CACHED_USERS) {
     try {
@@ -361,7 +361,7 @@ cron.schedule('0 3 * * *', async () => {
     }
   }
   
-  console.log('✅ [' + new Date().toISOString() + '] Weekly auto-update complete');
+  console.log('✅ [' + new Date().toISOString() + '] Daily auto-update complete');
 });
 
 console.log('⏰ Cron job scheduled: Daily updates every Sunday at 3am');
